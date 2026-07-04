@@ -419,11 +419,7 @@ class RelationshipsButton(discord.ui.Button):
                 self.panel.oauth_client.fetch_relationships,
                 self.panel.owner_id,
             )
-            view = build_list_view(
-                "Linked Relationships",
-                relationships,
-                "relationship",
-            )
+            view = RelationshipsPageView(relationships, self.panel.owner_id)
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
 
@@ -589,6 +585,106 @@ class GuildPageButton(discord.ui.Button):
                 self.guilds_view.guilds,
                 self.guilds_view.owner_id,
                 self.guilds_view.page + self.direction,
+            )
+        )
+
+
+class RelationshipsPageView(discord.ui.LayoutView):
+    page_size = 2
+
+    def __init__(
+        self,
+        relationships: list[dict[str, Any]],
+        owner_id: int,
+        page: int = 0,
+    ):
+        super().__init__(timeout=300)
+        self.relationships = relationships
+        self.owner_id = int(owner_id)
+        self.page = max(0, min(page, self.max_page))
+
+        if not relationships:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay("## Linked Relationships\nNo relationships were returned."),
+                    accent_color=ACCENT_MUTED,
+                )
+            )
+            return
+
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(
+                f"## Linked Relationships\nPage {self.page + 1} of {self.max_page + 1}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ]
+
+        for index, relationship in enumerate(self.current_relationships):
+            children.append(relationship_section(relationship))
+            if index < len(self.current_relationships) - 1:
+                children.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        children.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    RelationshipPageButton(self, -1),
+                    RelationshipPageButton(self, 1),
+                ),
+            ]
+        )
+
+        self.add_item(
+            discord.ui.Container(
+                *children,
+                accent_color=ACCENT_DEFAULT,
+            )
+        )
+
+    @property
+    def current_relationships(self) -> list[dict[str, Any]]:
+        start = self.page * self.page_size
+        return self.relationships[start : start + self.page_size]
+
+    @property
+    def max_page(self) -> int:
+        if not self.relationships:
+            return 0
+        return (len(self.relationships) - 1) // self.page_size
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This relationship list belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class RelationshipPageButton(discord.ui.Button):
+    def __init__(self, relationships_view: RelationshipsPageView, direction: int):
+        self.relationships_view = relationships_view
+        self.direction = direction
+        label = "Previous" if direction < 0 else "Next"
+        disabled = (
+            relationships_view.page <= 0
+            if direction < 0
+            else relationships_view.page >= relationships_view.max_page
+        )
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            view=RelationshipsPageView(
+                self.relationships_view.relationships,
+                self.relationships_view.owner_id,
+                self.relationships_view.page + self.direction,
             )
         )
 
@@ -815,6 +911,127 @@ def bot_has_admin_in_interaction(interaction: discord.Interaction) -> bool:
         return False
 
     return guild_member.guild_permissions.administrator
+
+
+def relationship_section(relationship: dict[str, Any]) -> discord.ui.Section:
+    return discord.ui.Section(
+        relationship_text(relationship),
+        accessory=discord.ui.Thumbnail(relationship_avatar_url(relationship)),
+    )
+
+
+def relationship_text(relationship: dict[str, Any]) -> str:
+    user = relationship_user(relationship)
+    name = relationship_display_name(relationship)
+    user_id = relationship_user_id(relationship)
+    username = user.get("username") or relationship.get("username")
+    relationship_type = relationship_type_label(relationship)
+
+    lines = [
+        f"### {name}",
+        f"**User ID:** `{user_id or 'unknown'}`",
+        f"**Relationship:** {relationship_type}",
+    ]
+
+    if username and username != name:
+        lines.append(f"**Username:** {username}")
+
+    nickname = relationship.get("nickname") or relationship.get("nick")
+    if nickname:
+        lines.append(f"**Nickname:** {nickname}")
+
+    since = (
+        relationship.get("since")
+        or relationship.get("created_at")
+        or relationship.get("createdAt")
+        or relationship.get("updated_at")
+        or relationship.get("updatedAt")
+    )
+    if since:
+        lines.append(f"**Since:** {since}")
+
+    return "\n".join(lines)
+
+
+def relationship_user(relationship: dict[str, Any]) -> dict[str, Any]:
+    for key in ("user", "discord_user", "discordUser", "recipient"):
+        value = relationship.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def relationship_display_name(relationship: dict[str, Any]) -> str:
+    user = relationship_user(relationship)
+    return str(
+        user.get("global_name")
+        or user.get("display_name")
+        or user.get("username")
+        or relationship.get("global_name")
+        or relationship.get("display_name")
+        or relationship.get("username")
+        or relationship_user_id(relationship)
+        or "Unknown user"
+    )
+
+
+def relationship_user_id(relationship: dict[str, Any]) -> str | None:
+    user = relationship_user(relationship)
+    value = (
+        user.get("id")
+        or relationship.get("user_id")
+        or relationship.get("userId")
+        or relationship.get("id")
+    )
+    if value is None:
+        return None
+    return str(value)
+
+
+def relationship_avatar_url(relationship: dict[str, Any]) -> str:
+    user = relationship_user(relationship)
+    user_id = relationship_user_id(relationship)
+    avatar_hash = user.get("avatar") or relationship.get("avatar")
+    if user_id and avatar_hash:
+        extension = "gif" if str(avatar_hash).startswith("a_") else "webp"
+        return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{extension}?size=128"
+
+    return "https://cdn.discordapp.com/embed/avatars/0.png"
+
+
+def relationship_type_label(relationship: dict[str, Any]) -> str:
+    value = None
+    for key in (
+        "type",
+        "relationship_type",
+        "relationshipType",
+        "discord_relationship_type",
+        "discordRelationshipType",
+        "discord_type",
+    ):
+        if key in relationship and relationship[key] is not None:
+            value = relationship[key]
+            break
+
+    if value is None:
+        return "Unknown"
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized.isdigit():
+            value = int(normalized)
+        else:
+            return normalized.replace("_", " ").replace("-", " ").title()
+
+    labels = {
+        0: "None",
+        1: "Friend",
+        2: "Blocked",
+        3: "Incoming Request",
+        4: "Outgoing Request",
+        5: "Implicit",
+    }
+    return labels.get(value, str(value))
 
 
 def build_faq_view() -> discord.ui.LayoutView:
