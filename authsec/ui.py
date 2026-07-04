@@ -328,7 +328,7 @@ class RefreshButton(discord.ui.Button):
                 self.panel.oauth_client,
                 self.panel.owner_id,
                 account,
-                can_join_here=interaction.guild is not None,
+                can_join_here=bot_has_admin_in_interaction(interaction),
                 note=note,
             )
         )
@@ -447,6 +447,13 @@ class JoinServerButton(discord.ui.Button):
             )
             return
 
+        if not bot_has_admin_in_interaction(interaction):
+            await interaction.response.send_message(
+                view=build_error_view("This server is not available for joining."),
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             message = await asyncio.to_thread(
@@ -482,7 +489,7 @@ class DisconnectButton(discord.ui.Button):
                 self.panel.oauth_client,
                 self.panel.owner_id,
                 None,
-                can_join_here=interaction.guild is not None,
+                can_join_here=bot_has_admin_in_interaction(interaction),
                 note=note,
             )
         )
@@ -518,8 +525,10 @@ class GuildsPageView(discord.ui.LayoutView):
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
 
-        for guild in self.current_guilds:
+        for index, guild in enumerate(self.current_guilds):
             children.append(guild_section(guild))
+            if index < len(self.current_guilds) - 1:
+                children.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         children.extend(
             [
@@ -714,16 +723,16 @@ def guild_text(guild: dict[str, Any]) -> str:
         f"**Permissions:** {permissions}",
     ]
 
+    vanity_invite = guild_vanity_invite(guild)
+    if vanity_invite:
+        lines.append(f"**Vanity invite:** {vanity_invite}")
+
     approximate_members = guild.get("approximate_member_count")
     approximate_presence = guild.get("approximate_presence_count")
     if approximate_members is not None:
         lines.append(f"**Approx. members:** {approximate_members}")
     if approximate_presence is not None:
         lines.append(f"**Approx. online:** {approximate_presence}")
-
-    features = guild.get("features") or []
-    if features:
-        lines.append(f"**Features:** {', '.join(features[:4])}")
 
     return "\n".join(lines)
 
@@ -746,21 +755,63 @@ def guild_permissions(guild: dict[str, Any]) -> str:
     try:
         permissions = discord.Permissions(int(raw_permissions))
     except (TypeError, ValueError):
-        return f"`{raw_permissions}`"
+        return "Unknown"
 
-    labels = []
-    if permissions.administrator:
-        labels.append("Administrator")
-    if permissions.manage_guild:
-        labels.append("Manage Server")
-    if permissions.manage_channels:
-        labels.append("Manage Channels")
-    if permissions.manage_roles:
-        labels.append("Manage Roles")
-
+    labels = [format_permission_name(name) for name, enabled in permissions if enabled]
     if labels:
         return ", ".join(labels)
-    return f"`{raw_permissions}`"
+    return "None"
+
+
+def guild_vanity_invite(guild: dict[str, Any]) -> str | None:
+    value = (
+        guild.get("vanity_url_code")
+        or guild.get("vanity_invite")
+        or guild.get("vanity_url")
+    )
+    if not value:
+        return None
+
+    value = str(value)
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    return f"https://discord.gg/{value}"
+
+
+def format_permission_name(name: str) -> str:
+    overrides = {
+        "administrator": "Administrator",
+        "manage_guild": "Manage Server",
+        "manage_emojis": "Manage Expressions",
+        "manage_emojis_and_stickers": "Manage Expressions",
+        "use_slash_commands": "Use Application Commands",
+    }
+    if name in overrides:
+        return overrides[name]
+    return name.replace("_", " ").title()
+
+
+def bot_has_admin_in_interaction(interaction: discord.Interaction) -> bool:
+    if interaction.guild is None:
+        return False
+
+    app_permissions = getattr(interaction, "app_permissions", None)
+    if app_permissions is not None and app_permissions.administrator:
+        return True
+
+    guild_me = getattr(interaction.guild, "me", None)
+    if guild_me is not None and guild_me.guild_permissions.administrator:
+        return True
+
+    client_user = getattr(getattr(interaction, "client", None), "user", None)
+    if client_user is None:
+        return False
+
+    guild_member = interaction.guild.get_member(client_user.id)
+    if guild_member is None:
+        return False
+
+    return guild_member.guild_permissions.administrator
 
 
 def build_faq_view() -> discord.ui.LayoutView:
