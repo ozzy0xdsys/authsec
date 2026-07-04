@@ -30,6 +30,30 @@ COLOR_NAMES = {
 }
 
 
+DEFAULT_SETUP_SCOPES = [
+    "email",
+    "guilds",
+    "connections",
+    "relationships.read",
+]
+
+
+SCOPE_LABELS = {
+    "identify": "Identify",
+    "email": "Email",
+    "guilds": "Guilds",
+    "guilds.members.read": "Guild Join Dates",
+    "connections": "Connections",
+    "guilds.join": "Join Guilds",
+    "relationships.read": "Relationships",
+    "openid": "OpenID",
+    "applications.builds.read": "App Builds",
+    "applications.store.update": "Store Management",
+    "gdm.join": "Group DM Join",
+    "webhook.incoming": "Incoming Webhook",
+}
+
+
 class TextContainerView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -52,19 +76,14 @@ class SetupScopeView(discord.ui.LayoutView):
         super().__init__(timeout=300)
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
-        self.selected_scopes = [
-            "email",
-            "guilds",
-            "guilds.members.read",
-            "webhook.incoming",
-        ]
+        self.selected_scopes = list(DEFAULT_SETUP_SCOPES)
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "## Set up OAuth\n"
-                    "Choose the scopes you want to request. The `identify` scope "
-                    "is always included because it is needed to know which Discord "
-                    "account authorized the app."
+                    "Choose the account access to request. The default options cover "
+                    "the main panel buttons. `Identify` is always included so the app "
+                    "knows which Discord account authorized it."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.ActionRow(ScopeSelect(self)),
@@ -88,7 +107,7 @@ class ScopeSelect(discord.ui.Select):
     def __init__(self, parent: SetupScopeView):
         options = oauth_scope_options()
         super().__init__(
-            placeholder="Choose optional OAuth scopes",
+            placeholder="Choose account access",
             min_values=0,
             max_values=len(options),
             options=options,
@@ -103,7 +122,7 @@ class ScopeSelect(discord.ui.Select):
 class GenerateLinkButton(discord.ui.Button):
     def __init__(self, parent: SetupScopeView):
         super().__init__(
-            label="Generate OAuth Link",
+            label="Create OAuth Link",
             style=discord.ButtonStyle.primary,
         )
         self.parent_view = parent
@@ -129,10 +148,10 @@ class GeneratedOAuthLinkView(discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    "## OAuth link created\n"
-                    "Open this link to authorize the selected scopes. The link "
+                    "## Authorization Link Ready\n"
+                    "Open this link to authorize the selected access. The link "
                     "expires in a few minutes and can only be used once.\n\n"
-                    f"**Scopes:** {', '.join(scopes)}\n\n"
+                    f"**Access:** {format_scope_list(scopes)}\n\n"
                     f"`{url}`"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
@@ -152,7 +171,7 @@ class GeneratedOAuthLinkView(discord.ui.LayoutView):
 class PostOAuthButton(discord.ui.Button):
     def __init__(self, parent: GeneratedOAuthLinkView):
         super().__init__(
-            label="Post Here",
+            label="Post Button Here",
             style=discord.ButtonStyle.primary,
         )
         self.parent_view = parent
@@ -898,12 +917,12 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             label="Guild Join Dates",
             value="guilds.members.read",
             description="Show when the linked account joined each server.",
-            default=True,
         ),
         discord.SelectOption(
             label="Connections",
             value="connections",
             description="Allow /panel to list linked third-party accounts.",
+            default=True,
         ),
         discord.SelectOption(
             label="Join Guilds",
@@ -914,6 +933,7 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             label="Relationships",
             value="relationships.read",
             description="Allow /panel to list linked relationships.",
+            default=True,
         ),
         discord.SelectOption(
             label="OpenID",
@@ -939,9 +959,13 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             label="Incoming Webhook",
             value="webhook.incoming",
             description="Create an incoming webhook during authorization.",
-            default=True,
         ),
     ]
+
+
+def format_scope_list(scopes: list[str]) -> str:
+    labels = [SCOPE_LABELS.get(scope, scope) for scope in scopes]
+    return ", ".join(labels) if labels else "Identify"
 
 
 def panel_text(account: OAuthAccount | None, note: str | None = None) -> str:
@@ -956,12 +980,13 @@ def panel_text(account: OAuthAccount | None, note: str | None = None) -> str:
 
     lines = [
         "## AuthSec Panel",
-        "Manage the OAuth account linked to your Discord user.",
+        "Manage the OAuth account linked to your Discord user. Unavailable actions "
+        "stay disabled until the matching access is authorized.",
         "",
         f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
         f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
         f"**Authorization IP:** `{account.ip_address or 'unknown'}`",
-        f"**Scopes:** {', '.join(account.scopes) or 'identify'}",
+        f"**Access:** {format_scope_list(account.scopes)}",
         f"**Token expires:** <t:{account.expires_at}:R>",
         f"**Last updated:** <t:{account.updated_at}:R>",
     ]
@@ -1402,7 +1427,7 @@ def build_linked_dm_view(account: OAuthAccount) -> discord.ui.LayoutView:
                 f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
                 f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
                 f"**Authorization IP:** `{account.ip_address or 'unknown'}`",
-                f"**Scopes:** {', '.join(account.scopes)}",
+                f"**Access:** {format_scope_list(account.scopes)}",
                 f"**Linked:** <t:{int(time.time())}:R>",
             ]
         ),
