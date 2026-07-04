@@ -55,6 +55,8 @@ You can also use environment variables on a VPS:
 export DISCORD_TOKEN="BOT_TOKEN"
 export DISCORD_CLIENT_ID="CLIENT_ID"
 export DISCORD_CLIENT_SECRET="CLIENT_SECRET"
+export AUTHSEC_WEB_PORT="80"
+export AUTHSEC_REDIRECT_URI="https://authsec.xyz/callback"
 ```
 
 ## Database
@@ -100,3 +102,6 @@ directly:
 sudo systemctl restart authsec
 sudo journalctl -u authsec -f
 ```
+
+If port 80 is already in use, stop the old process or set `AUTHSEC_WEB_PORT` to
+the port your reverse proxy forwards to.

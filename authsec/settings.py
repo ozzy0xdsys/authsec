@@ -98,6 +98,30 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         )
 
     database_path = _resolve_path(database.get("path"), DEFAULT_DATABASE_PATH)
+    web_host = _first_value(
+        web,
+        raw,
+        ("host", "web_host"),
+        ("AUTHSEC_WEB_HOST", "WEB_HOST"),
+    )
+    web_port = _first_value(
+        web,
+        raw,
+        ("port", "web_port"),
+        ("AUTHSEC_WEB_PORT", "WEB_PORT", "PORT"),
+    )
+    redirect_uri = _first_value(
+        web,
+        raw,
+        ("redirect_uri", "callback_url"),
+        ("AUTHSEC_REDIRECT_URI", "DISCORD_REDIRECT_URI"),
+    )
+    force_https = _first_value(
+        web,
+        raw,
+        ("force_https",),
+        ("AUTHSEC_FORCE_HTTPS",),
+    )
 
     return Settings(
         discord=DiscordSettings(
@@ -109,10 +133,10 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
             guild_id=_optional_int(discord.get("guild_id")),
         ),
         web=WebSettings(
-            host=str(web.get("host", "0.0.0.0")),
-            port=int(web.get("port", 80)),
-            redirect_uri=str(web.get("redirect_uri", DEFAULT_REDIRECT_URI)),
-            force_https=bool(web.get("force_https", True)),
+            host=str(web_host or "0.0.0.0"),
+            port=int(web_port or 80),
+            redirect_uri=str(redirect_uri or DEFAULT_REDIRECT_URI),
+            force_https=_bool_value(force_https, True),
         ),
         database=DatabaseSettings(path=database_path),
         oauth=OAuthSettings(
@@ -148,6 +172,22 @@ def _optional_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
     return int(value)
+
+
+def _bool_value(value: Any, default: bool) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _first_value(
