@@ -14,10 +14,9 @@ from .ui import (
     CreateOAuthButtonModal,
     PanelView,
     SetupScopeView,
-    build_faq_embed,
-    build_linked_dm_embed,
-    build_panel_embed,
-    build_setup_embed,
+    build_faq_view,
+    build_linked_dm_view,
+    build_ping_view,
 )
 
 
@@ -49,7 +48,7 @@ class BotRuntime:
             return
 
         user = await self.client.fetch_user(account.owner_id)
-        await user.send(embed=build_linked_dm_embed(account))
+        await user.send(view=build_linked_dm_view(account))
 
     @staticmethod
     def _log_background_error(future: asyncio.Future) -> None:
@@ -97,7 +96,6 @@ def create_bot(
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def setup(interaction: discord.Interaction):
         await interaction.response.send_message(
-            embed=build_setup_embed(),
             view=SetupScopeView(oauth_client, interaction.user.id),
             ephemeral=True,
         )
@@ -128,12 +126,12 @@ def create_bot(
             error = str(exc)
 
         await interaction.followup.send(
-            embed=build_panel_embed(account, error),
             view=PanelView(
                 oauth_client,
                 interaction.user.id,
                 account,
                 can_join_here=interaction.guild is not None,
+                note=error,
             ),
             ephemeral=True,
         )
@@ -141,14 +139,14 @@ def create_bot(
     @bot.tree.command(name="faq", description="Explain how the OAuth bot works.")
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def faq(interaction: discord.Interaction):
-        await interaction.response.send_message(embed=build_faq_embed(), ephemeral=True)
+        await interaction.response.send_message(view=build_faq_view(), ephemeral=True)
 
     @bot.tree.command(name="ping", description="Check whether the bot is responding.")
     @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
     async def ping(interaction: discord.Interaction):
         latency_ms = round(bot.latency * 1000)
         await interaction.response.send_message(
-            f"Pong. Gateway latency: {latency_ms}ms.",
+            view=build_ping_view(latency_ms),
             ephemeral=True,
         )
 

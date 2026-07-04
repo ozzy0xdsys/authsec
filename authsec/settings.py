@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,12 +60,25 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     database = _dict(raw.get("database"))
     oauth = _dict(raw.get("oauth"))
 
-    token = discord.get("token") or raw.get("token")
-    client_id = discord.get("client_id") or discord.get("id") or raw.get("id")
+    token = _first_value(
+        discord,
+        raw,
+        ("token", "bot_token", "discord_token"),
+        ("DISCORD_TOKEN", "BOT_TOKEN", "AUTHSEC_DISCORD_TOKEN"),
+    )
+    client_id = _first_value(
+        discord,
+        raw,
+        ("client_id", "application_id", "id"),
+        ("DISCORD_CLIENT_ID", "DISCORD_APPLICATION_ID", "AUTHSEC_CLIENT_ID"),
+    )
     client_secret = (
-        discord.get("client_secret")
-        or discord.get("secret")
-        or raw.get("secret")
+        _first_value(
+            discord,
+            raw,
+            ("client_secret", "secret"),
+            ("DISCORD_CLIENT_SECRET", "AUTHSEC_CLIENT_SECRET"),
+        )
     )
 
     missing = [
@@ -78,7 +92,11 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     ]
     if missing:
         joined = ", ".join(missing)
-        raise RuntimeError(f"Missing required config value(s): {joined}")
+        raise RuntimeError(
+            f"Missing required config value(s): {joined}. "
+            f"Checked {path} plus DISCORD_TOKEN, DISCORD_CLIENT_ID, "
+            "and DISCORD_CLIENT_SECRET environment variables."
+        )
 
     database_path = _resolve_path(database.get("path"), DEFAULT_DATABASE_PATH)
 
@@ -118,6 +136,25 @@ def _optional_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
     return int(value)
+
+
+def _first_value(
+    nested: dict[str, Any],
+    root: dict[str, Any],
+    keys: tuple[str, ...],
+    environment_keys: tuple[str, ...],
+) -> Any:
+    for key in keys:
+        if nested.get(key):
+            return nested[key]
+        if root.get(key):
+            return root[key]
+
+    for key in environment_keys:
+        if os.environ.get(key):
+            return os.environ[key]
+
+    return None
 
 
 def _resolve_path(value: Any, default: Path) -> Path:

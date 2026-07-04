@@ -74,6 +74,7 @@ class DiscordOAuthClient:
             discord_user_id=discord_user_id,
             username=user_payload["username"],
             global_name=user_payload["global_name"],
+            mfa_enabled=user_payload["mfa_enabled"],
             access_token=access_token,
             refresh_token=refresh_token,
             token_type=str(token.get("token_type", "Bearer")),
@@ -113,9 +114,18 @@ class DiscordOAuthClient:
 
         token = self._refresh_token(account.refresh_token)
         now = int(time.time())
+        access_token = _required(token, "access_token")
+        user_payload = safe_user_payload(self.fetch_current_user_with_token(access_token))
         updated = replace(
             account,
-            access_token=_required(token, "access_token"),
+            username=user_payload["username"] or account.username,
+            global_name=user_payload["global_name"] or account.global_name,
+            mfa_enabled=(
+                user_payload["mfa_enabled"]
+                if user_payload["mfa_enabled"] is not None
+                else account.mfa_enabled
+            ),
+            access_token=access_token,
             refresh_token=str(token.get("refresh_token") or account.refresh_token),
             token_type=str(token.get("token_type", account.token_type)),
             expires_at=now + int(token.get("expires_in", 3600)),

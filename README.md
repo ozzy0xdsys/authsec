@@ -9,6 +9,8 @@ AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
 - `/panel` shows the linked account and provides working actions:
   - refresh tokens
   - view current user details
+  - show the callback IP address stored when OAuth completes
+  - show whether MFA is enabled when Discord includes `mfa_enabled` in the OAuth user payload
   - list guilds when the `guilds` scope is granted
   - list connections when the `connections` scope is granted
   - list relationships when `relationships.read` is granted and Discord has approved the application for that scope
@@ -16,6 +18,8 @@ AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
   - disconnect and revoke the token
 - `/faq` explains the bot behavior.
 - `/ping` confirms the bot is alive.
+
+The Discord command UI uses Discord components v2 (`LayoutView`, containers, text displays, and action rows).
 
 ## Files
 
@@ -42,6 +46,14 @@ The app still supports the old flat `config.json` shape:
 
 For future edits, use the clearer nested shape in `config.example.json`.
 
+You can also use environment variables on a VPS:
+
+```bash
+export DISCORD_TOKEN="BOT_TOKEN"
+export DISCORD_CLIENT_ID="CLIENT_ID"
+export DISCORD_CLIENT_SECRET="CLIENT_SECRET"
+```
+
 ## Database
 
 The old `database.json` file is gone. On startup, the app creates `authsec.sqlite3`
@@ -55,3 +67,33 @@ and applies the schema automatically.
 
 Make sure the redirect URI in Discord's developer portal matches the `web.redirect_uri`
 value in config.
+
+## Quick Deploy
+
+Push from your computer:
+
+```bash
+git status
+git add .
+git commit -m "Update OAuth bot with SQLite and components v2"
+git push origin main
+```
+
+Update on the VPS:
+
+```bash
+cd /root/authsec
+git pull origin main
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+If you run it with systemd, restart the service instead of running `python main.py`
+directly:
+
+```bash
+sudo systemctl restart authsec
+sudo journalctl -u authsec -f
+```

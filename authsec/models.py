@@ -20,6 +20,7 @@ class OAuthAccount:
     discord_user_id: str
     username: str | None
     global_name: str | None
+    mfa_enabled: bool | None
     access_token: str
     refresh_token: str
     token_type: str
@@ -64,9 +65,14 @@ def scopes_from_json(value: str | None) -> list[str]:
     return [str(item) for item in decoded]
 
 
-def safe_user_payload(user: dict[str, Any]) -> dict[str, str | None]:
+def safe_user_payload(user: dict[str, Any]) -> dict[str, Any]:
+    mfa_enabled = user.get("mfa_enabled")
+    if mfa_enabled is not None:
+        mfa_enabled = bool(mfa_enabled)
+
     return {
         "discord_user_id": str(user.get("id", "")),
         "username": user.get("username"),
         "global_name": user.get("global_name"),
+        "mfa_enabled": mfa_enabled,
     }

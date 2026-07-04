@@ -45,6 +45,7 @@ class AuthDatabase:
                     discord_user_id TEXT NOT NULL,
                     username TEXT,
                     global_name TEXT,
+                    mfa_enabled INTEGER,
                     access_token TEXT NOT NULL,
                     refresh_token TEXT NOT NULL,
                     token_type TEXT NOT NULL DEFAULT 'Bearer',
@@ -76,6 +77,7 @@ class AuthDatabase:
                 );
                 """
             )
+            self._ensure_column("oauth_accounts", "mfa_enabled", "INTEGER")
 
     def save_state(
         self,
@@ -157,6 +159,7 @@ class AuthDatabase:
                     discord_user_id,
                     username,
                     global_name,
+                    mfa_enabled,
                     access_token,
                     refresh_token,
                     token_type,
@@ -166,11 +169,12 @@ class AuthDatabase:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(owner_id) DO UPDATE SET
                     discord_user_id = excluded.discord_user_id,
                     username = excluded.username,
                     global_name = excluded.global_name,
+                    mfa_enabled = excluded.mfa_enabled,
                     access_token = excluded.access_token,
                     refresh_token = excluded.refresh_token,
                     token_type = excluded.token_type,
@@ -184,6 +188,7 @@ class AuthDatabase:
                     account.discord_user_id,
                     account.username,
                     account.global_name,
+                    _bool_to_int(account.mfa_enabled),
                     account.access_token,
                     account.refresh_token,
                     account.token_type,
@@ -237,6 +242,16 @@ class AuthDatabase:
                 (owner_id, event_type, details, _now()),
             )
 
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {
+            row["name"]
+            for row in self._connection.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in columns:
+            self._connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            )
+
 
 def _account_from_row(row: sqlite3.Row) -> OAuthAccount:
     return OAuthAccount(
@@ -244,6 +259,7 @@ def _account_from_row(row: sqlite3.Row) -> OAuthAccount:
         discord_user_id=str(row["discord_user_id"]),
         username=row["username"],
         global_name=row["global_name"],
+        mfa_enabled=_int_to_bool(row["mfa_enabled"]),
         access_token=row["access_token"],
         refresh_token=row["refresh_token"],
         token_type=row["token_type"],
@@ -257,3 +273,15 @@ def _account_from_row(row: sqlite3.Row) -> OAuthAccount:
 
 def _now() -> int:
     return int(time.time())
+
+
+def _bool_to_int(value: bool | None) -> int | None:
+    if value is None:
+        return None
+    return 1 if value else 0
+
+
+def _int_to_bool(value: int | None) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)

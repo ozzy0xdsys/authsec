@@ -72,6 +72,11 @@ def create_web_app(oauth_client: DiscordOAuthClient, bot_runtime: BotRuntime) ->
 
 
 def _client_ip() -> str | None:
+    for header in ("CF-Connecting-IP", "X-Real-IP"):
+        value = request.headers.get(header)
+        if value:
+            return value.strip()
+
     forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for:
         return forwarded_for.split(",", 1)[0].strip()
