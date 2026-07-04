@@ -56,17 +56,8 @@ def create_web_app(oauth_client: DiscordOAuthClient, bot_runtime: BotRuntime) ->
         except DiscordApiError as exc:
             return _page("Authorization failed", str(exc), exc.status_code)
 
-        dm_scheduled = bot_runtime.notify_linked_account(account)
-        suffix = (
-            "A confirmation DM is on the way."
-            if dm_scheduled
-            else "Return to Discord and run /panel."
-        )
-        return _page(
-            "Authorization complete",
-            f"{account.display_name} is linked. {suffix}",
-            200,
-        )
+        bot_runtime.notify_linked_account(account)
+        return _close_tab_page()
 
     return app
 
@@ -141,3 +132,25 @@ def _page(title: str, message: str, status: int) -> Response:
     </html>
     """
     return Response(body, status=status, mimetype="text/html")
+
+
+def _close_tab_page() -> Response:
+    body = """
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title></title>
+        <script>
+          window.open("", "_self");
+          window.close();
+          setTimeout(() => {
+            document.body.textContent = "";
+          }, 50);
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+    return Response(body, status=200, mimetype="text/html")

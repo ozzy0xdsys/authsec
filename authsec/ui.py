@@ -757,6 +757,9 @@ def guild_permissions(guild: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         return "Unknown"
 
+    if permissions.administrator:
+        return "Administrator"
+
     labels = [format_permission_name(name) for name, enabled in permissions if enabled]
     if labels:
         return ", ".join(labels)
