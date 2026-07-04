@@ -52,7 +52,7 @@ class SetupScopeView(discord.ui.LayoutView):
         super().__init__(timeout=300)
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
-        self.selected_scopes = ["email", "guilds"]
+        self.selected_scopes = ["email", "guilds", "guilds.members.read"]
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
@@ -81,11 +81,12 @@ class SetupScopeView(discord.ui.LayoutView):
 
 class ScopeSelect(discord.ui.Select):
     def __init__(self, parent: SetupScopeView):
+        options = oauth_scope_options()
         super().__init__(
             placeholder="Choose optional OAuth scopes",
             min_values=0,
-            max_values=5,
-            options=oauth_scope_options(),
+            max_values=len(options),
+            options=options,
         )
         self.parent_view = parent
 
@@ -374,7 +375,20 @@ class GuildsButton(discord.ui.Button):
                 self.panel.oauth_client.fetch_guilds,
                 self.panel.owner_id,
             )
-            view = GuildsPageView(guilds, self.panel.owner_id)
+            member_details = await fetch_guild_page_member_details(
+                self.panel.oauth_client,
+                self.panel.owner_id,
+                guilds,
+                0,
+                self.panel.account,
+            )
+            view = GuildsPageView(
+                guilds,
+                self.panel.owner_id,
+                self.panel.oauth_client,
+                member_details=member_details,
+                can_show_join_dates=can_show_guild_join_dates(self.panel.account),
+            )
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
 
@@ -582,12 +596,18 @@ class GuildsPageView(discord.ui.LayoutView):
         self,
         guilds: list[dict[str, Any]],
         owner_id: int,
+        oauth_client: DiscordOAuthClient | None = None,
         page: int = 0,
+        member_details: dict[str, dict[str, Any]] | None = None,
+        can_show_join_dates: bool = False,
     ):
         super().__init__(timeout=300)
         self.guilds = guilds
         self.owner_id = int(owner_id)
+        self.oauth_client = oauth_client
         self.page = max(0, min(page, self.max_page))
+        self.member_details = member_details or {}
+        self.can_show_join_dates = can_show_join_dates
 
         if not guilds:
             self.add_item(
@@ -606,7 +626,8 @@ class GuildsPageView(discord.ui.LayoutView):
         ]
 
         for index, guild in enumerate(self.current_guilds):
-            children.append(guild_section(guild))
+            guild_id = str(guild.get("id", ""))
+            children.append(guild_section(guild, self.member_details.get(guild_id)))
             if index < len(self.current_guilds) - 1:
                 children.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
@@ -664,11 +685,25 @@ class GuildPageButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
+        await interaction.response.defer()
+        next_page = self.guilds_view.page + self.direction
+        member_details = {}
+        if self.guilds_view.can_show_join_dates and self.guilds_view.oauth_client:
+            member_details = await fetch_guild_page_member_details(
+                self.guilds_view.oauth_client,
+                self.guilds_view.owner_id,
+                self.guilds_view.guilds,
+                next_page,
+            )
+
+        await interaction.edit_original_response(
             view=GuildsPageView(
                 self.guilds_view.guilds,
                 self.guilds_view.owner_id,
-                self.guilds_view.page + self.direction,
+                self.guilds_view.oauth_client,
+                page=next_page,
+                member_details=member_details,
+                can_show_join_dates=self.guilds_view.can_show_join_dates,
             )
         )
 
@@ -788,6 +823,12 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             default=True,
         ),
         discord.SelectOption(
+            label="Guild Join Dates",
+            value="guilds.members.read",
+            description="Show when the linked account joined each server.",
+            default=True,
+        ),
+        discord.SelectOption(
             label="Connections",
             value="connections",
             description="Allow /panel to list linked third-party accounts.",
@@ -887,14 +928,20 @@ def build_list_view(
     return TextContainerView(title, "\n".join(lines), ACCENT_DEFAULT)
 
 
-def guild_section(guild: dict[str, Any]) -> discord.ui.Section:
+def guild_section(
+    guild: dict[str, Any],
+    member_detail: dict[str, Any] | None = None,
+) -> discord.ui.Section:
     return discord.ui.Section(
-        guild_text(guild),
+        guild_text(guild, member_detail),
         accessory=discord.ui.Thumbnail(guild_icon_url(guild)),
     )
 
 
-def guild_text(guild: dict[str, Any]) -> str:
+def guild_text(
+    guild: dict[str, Any],
+    member_detail: dict[str, Any] | None = None,
+) -> str:
     permissions = guild_permissions(guild)
     lines = [
         f"### {guild.get('name') or 'Unknown server'}",
@@ -906,6 +953,10 @@ def guild_text(guild: dict[str, Any]) -> str:
     vanity_invite = guild_vanity_invite(guild)
     if vanity_invite:
         lines.append(f"**Vanity invite:** {vanity_invite}")
+
+    joined_at = (member_detail or {}).get("joined_at")
+    if joined_at:
+        lines.append(f"**Joined:** {format_time_value(joined_at)}")
 
     approximate_members = guild.get("approximate_member_count")
     approximate_presence = guild.get("approximate_presence_count")
@@ -997,6 +1048,39 @@ def bot_has_admin_in_interaction(interaction: discord.Interaction) -> bool:
     return guild_member.guild_permissions.administrator
 
 
+def can_show_guild_join_dates(account: OAuthAccount | None) -> bool:
+    return bool(account and account.has_scope("guilds.members.read"))
+
+
+async def fetch_guild_page_member_details(
+    oauth_client: DiscordOAuthClient,
+    owner_id: int,
+    guilds: list[dict[str, Any]],
+    page: int,
+    account: OAuthAccount | None = None,
+) -> dict[str, dict[str, Any]]:
+    if account is not None and not can_show_guild_join_dates(account):
+        return {}
+
+    start = max(0, page) * GuildsPageView.page_size
+    guild_ids = [
+        str(guild.get("id"))
+        for guild in guilds[start : start + GuildsPageView.page_size]
+        if guild.get("id")
+    ]
+    if not guild_ids:
+        return {}
+
+    try:
+        return await asyncio.to_thread(
+            oauth_client.fetch_guild_member_details,
+            owner_id,
+            guild_ids,
+        )
+    except DiscordApiError:
+        return {}
+
+
 def relationship_section(relationship: dict[str, Any]) -> discord.ui.Section:
     return discord.ui.Section(
         relationship_text(relationship),
@@ -1032,7 +1116,7 @@ def relationship_text(relationship: dict[str, Any]) -> str:
         or relationship.get("updatedAt")
     )
     if since:
-        lines.append(f"**Since:** {format_relationship_time(since)}")
+        lines.append(f"**Since:** {format_time_value(since)}")
 
     return "\n".join(lines)
 
@@ -1118,14 +1202,14 @@ def relationship_type_label(relationship: dict[str, Any]) -> str:
     return labels.get(value, str(value))
 
 
-def format_relationship_time(value: Any) -> str:
-    timestamp = relationship_timestamp(value)
+def format_time_value(value: Any) -> str:
+    timestamp = value_timestamp(value)
     if timestamp is None:
         return str(value)
     return f"<t:{timestamp}:F> (<t:{timestamp}:R>)"
 
 
-def relationship_timestamp(value: Any) -> int | None:
+def value_timestamp(value: Any) -> int | None:
     if isinstance(value, datetime):
         parsed = value
     elif isinstance(value, (int, float)):

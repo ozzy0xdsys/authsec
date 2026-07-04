@@ -180,6 +180,33 @@ class DiscordOAuthClient:
             return payload
         raise DiscordApiError("Discord returned an unexpected guild list.", 502)
 
+    def fetch_guild_member_details(
+        self,
+        owner_id: int,
+        guild_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        account = self._required_account(owner_id)
+        _require_scope(account, "guilds.members.read")
+
+        details = {}
+        for guild_id in guild_ids:
+            if not guild_id:
+                continue
+
+            try:
+                payload = self._request_json(
+                    "GET",
+                    f"/users/@me/guilds/{guild_id}/member",
+                    headers=_bearer_headers(account.access_token),
+                )
+            except DiscordApiError:
+                continue
+
+            if isinstance(payload, dict):
+                details[str(guild_id)] = payload
+
+        return details
+
     def fetch_connections(self, owner_id: int) -> list[dict[str, Any]]:
         account = self._required_account(owner_id)
         _require_scope(account, "connections")

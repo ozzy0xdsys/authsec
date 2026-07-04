@@ -12,7 +12,7 @@ AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
   - view current user details
   - show the callback IP address stored when OAuth completes
   - show whether MFA is enabled when Discord includes `mfa_enabled` in the OAuth user payload
-  - list guilds two per page with server icons, ownership, IDs, decoded permissions, vanity invite data, counts, and pagination
+  - list guilds two per page with server icons, ownership, IDs, decoded permissions, vanity invite data, join dates, counts, and pagination
   - list connections when the `connections` scope is granted
   - list relationships two per page with user avatars, IDs, decoded relationship types, and pagination
   - add the linked account to the current server when `guilds.join` is granted and the bot has administrator in that server
