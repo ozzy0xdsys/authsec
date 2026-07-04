@@ -1,0 +1,24 @@
+{
+  "discord": {
+    "token": "YOUR_BOT_TOKEN",
+    "client_id": "YOUR_APPLICATION_CLIENT_ID",
+    "client_secret": "YOUR_APPLICATION_CLIENT_SECRET",
+    "command_prefix": "!",
+    "sync_commands": true,
+    "guild_id": null
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 80,
+    "redirect_uri": "https://authsec.xyz/callback",
+    "force_https": true
+  },
+  "database": {
+    "path": "authsec.sqlite3"
+  },
+  "oauth": {
+    "request_timeout": 10,
+    "refresh_before_expiry_seconds": 1209600,
+    "state_ttl_seconds": 600
+  }
+}

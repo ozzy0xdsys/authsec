@@ -1,0 +1,57 @@
+# AuthSec
+
+AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
+
+## What It Does
+
+- `/setup` lets a user choose OAuth scopes and creates a short-lived Discord authorization link.
+- `/create` posts a reusable button message for an OAuth link.
+- `/panel` shows the linked account and provides working actions:
+  - refresh tokens
+  - view current user details
+  - list guilds when the `guilds` scope is granted
+  - list connections when the `connections` scope is granted
+  - list relationships when `relationships.read` is granted and Discord has approved the application for that scope
+  - add the linked account to the current server when `guilds.join` is granted
+  - disconnect and revoke the token
+- `/faq` explains the bot behavior.
+- `/ping` confirms the bot is alive.
+
+## Files
+
+- `main.py` starts everything.
+- `authsec/app.py` wires the app together.
+- `authsec/settings.py` loads config.
+- `authsec/database.py` owns SQLite setup and queries.
+- `authsec/oauth.py` talks to Discord OAuth/API endpoints.
+- `authsec/bot.py` registers Discord commands.
+- `authsec/ui.py` contains embeds, modals, selects, and buttons.
+- `authsec/web.py` contains the Flask callback website.
+
+## Config
+
+The app still supports the old flat `config.json` shape:
+
+```json
+{
+  "token": "BOT_TOKEN",
+  "id": "CLIENT_ID",
+  "secret": "CLIENT_SECRET"
+}
+```
+
+For future edits, use the clearer nested shape in `config.example.json`.
+
+## Database
+
+The old `database.json` file is gone. On startup, the app creates `authsec.sqlite3`
+and applies the schema automatically.
+
+## Run
+
+```powershell
+.\.venv\Scripts\python.exe main.py
+```
+
+Make sure the redirect URI in Discord's developer portal matches the `web.redirect_uri`
+value in config.
