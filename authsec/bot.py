@@ -23,6 +23,15 @@ from .ui import (
 logger = logging.getLogger(__name__)
 
 
+def command_contexts(func):
+    func = app_commands.allowed_installs(guilds=True, users=True)(func)
+    return app_commands.allowed_contexts(
+        guilds=True,
+        dms=True,
+        private_channels=True,
+    )(func)
+
+
 class BotRuntime:
     def __init__(self):
         self.client: commands.Bot | None = None
@@ -93,7 +102,7 @@ def create_bot(
         )
 
     @bot.tree.command(name="setup", description="Create a Discord OAuth authorization link.")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @command_contexts
     async def setup(interaction: discord.Interaction):
         await interaction.response.send_message(
             view=SetupScopeView(oauth_client, interaction.user.id),
@@ -101,12 +110,12 @@ def create_bot(
         )
 
     @bot.tree.command(name="create", description="Post a reusable OAuth button message.")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @command_contexts
     async def create(interaction: discord.Interaction):
         await interaction.response.send_modal(CreateOAuthButtonModal())
 
     @bot.tree.command(name="panel", description="Manage your linked OAuth account.")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @command_contexts
     async def panel(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
@@ -137,12 +146,12 @@ def create_bot(
         )
 
     @bot.tree.command(name="faq", description="Explain how the OAuth bot works.")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @command_contexts
     async def faq(interaction: discord.Interaction):
         await interaction.response.send_message(view=build_faq_view(), ephemeral=True)
 
     @bot.tree.command(name="ping", description="Check whether the bot is responding.")
-    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @command_contexts
     async def ping(interaction: discord.Interaction):
         latency_ms = round(bot.latency * 1000)
         await interaction.response.send_message(

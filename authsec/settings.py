@@ -52,8 +52,7 @@ class Settings:
 
 
 def load_settings(path: Path = CONFIG_PATH) -> Settings:
-    with path.open("r", encoding="utf-8") as file:
-        raw = json.load(file)
+    raw = _load_config_file(path)
 
     discord = _dict(raw.get("discord"))
     web = _dict(raw.get("web"))
@@ -130,6 +129,19 @@ def _dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return {}
+
+
+def _load_config_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+
+    with path.open("r", encoding="utf-8") as file:
+        raw = json.load(file)
+
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"{path} must contain a JSON object.")
+
+    return raw
 
 
 def _optional_int(value: Any) -> int | None:
