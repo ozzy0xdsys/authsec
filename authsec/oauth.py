@@ -287,64 +287,6 @@ class DiscordOAuthClient:
             return f"Webhook message sent. Message ID: `{message_id}`"
         return "Webhook message sent."
 
-    def fetch_entitlements(self, owner_id: int) -> list[dict[str, Any]]:
-        account = self._required_account(owner_id)
-        _require_scope(account, "applications.entitlements")
-        payload = self._request_json(
-            "GET",
-            f"/applications/{self.settings.discord.client_id}/entitlements",
-            headers=_bearer_headers(account.access_token),
-            params={
-                "user_id": account.discord_user_id,
-                "limit": "25",
-                "exclude_deleted": "false",
-            },
-        )
-        if isinstance(payload, list):
-            return payload
-        raise DiscordApiError("Discord returned an unexpected entitlement list.", 502)
-
-    def fetch_role_connection(self, owner_id: int) -> dict[str, Any]:
-        account = self._required_account(owner_id)
-        _require_scope(account, "role_connections.write")
-        payload = self._request_json(
-            "GET",
-            f"/users/@me/applications/{self.settings.discord.client_id}/role-connection",
-            headers=_bearer_headers(account.access_token),
-        )
-        if isinstance(payload, dict):
-            return payload
-        raise DiscordApiError("Discord returned an unexpected role connection.", 502)
-
-    def update_role_connection(
-        self,
-        owner_id: int,
-        platform_name: str | None,
-        platform_username: str | None,
-        metadata: dict[str, str],
-    ) -> dict[str, Any]:
-        account = self._required_account(owner_id)
-        _require_scope(account, "role_connections.write")
-        payload: dict[str, Any] = {"metadata": metadata}
-        if platform_name:
-            payload["platform_name"] = platform_name[:50]
-        if platform_username:
-            payload["platform_username"] = platform_username[:100]
-
-        response = self._request_json(
-            "PUT",
-            f"/users/@me/applications/{self.settings.discord.client_id}/role-connection",
-            headers={
-                **_bearer_headers(account.access_token),
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        if isinstance(response, dict):
-            self.database.log_event("role_connection_updated", owner_id, account.discord_user_id)
-            return response
-        raise DiscordApiError("Discord returned an unexpected role connection.", 502)
-
     def _required_account(self, owner_id: int) -> OAuthAccount:
         account = self.get_account(owner_id, refresh_if_needed=True)
         if account is None:
