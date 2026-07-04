@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -1031,7 +1032,7 @@ def relationship_text(relationship: dict[str, Any]) -> str:
         or relationship.get("updatedAt")
     )
     if since:
-        lines.append(f"**Since:** {since}")
+        lines.append(f"**Since:** {format_relationship_time(since)}")
 
     return "\n".join(lines)
 
@@ -1115,6 +1116,44 @@ def relationship_type_label(relationship: dict[str, Any]) -> str:
         5: "Implicit",
     }
     return labels.get(value, str(value))
+
+
+def format_relationship_time(value: Any) -> str:
+    timestamp = relationship_timestamp(value)
+    if timestamp is None:
+        return str(value)
+    return f"<t:{timestamp}:F> (<t:{timestamp}:R>)"
+
+
+def relationship_timestamp(value: Any) -> int | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, (int, float)):
+        return int(value)
+    elif isinstance(value, str):
+        parsed = parse_datetime_string(value)
+        if parsed is None:
+            return None
+    else:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def parse_datetime_string(value: str) -> datetime | None:
+    text = value.strip()
+    if not text:
+        return None
+
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def build_faq_view() -> discord.ui.LayoutView:
