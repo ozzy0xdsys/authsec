@@ -174,6 +174,7 @@ class DiscordOAuthClient:
             "GET",
             "/users/@me/guilds",
             headers=_bearer_headers(account.access_token),
+            params={"with_counts": "true"},
         )
         if isinstance(payload, list):
             return payload

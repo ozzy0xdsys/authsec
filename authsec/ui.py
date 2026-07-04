@@ -117,13 +117,16 @@ class GenerateLinkButton(discord.ui.Button):
 class GeneratedOAuthLinkView(discord.ui.LayoutView):
     def __init__(self, url: str, scopes: list[str]):
         super().__init__(timeout=None)
+        self.url = url
+        self.scopes = scopes
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "## OAuth link created\n"
                     "Open this link to authorize the selected scopes. The link "
                     "expires in a few minutes and can only be used once.\n\n"
-                    f"**Scopes:** {', '.join(scopes)}"
+                    f"**Scopes:** {', '.join(scopes)}\n\n"
+                    f"`{url}`"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.ActionRow(
@@ -131,9 +134,29 @@ class GeneratedOAuthLinkView(discord.ui.LayoutView):
                         label="Authorize",
                         style=discord.ButtonStyle.link,
                         url=url,
-                    )
+                    ),
+                    PostOAuthButton(self),
                 ),
                 accent_color=ACCENT_SUCCESS,
+            )
+        )
+
+
+class PostOAuthButton(discord.ui.Button):
+    def __init__(self, parent: GeneratedOAuthLinkView):
+        super().__init__(
+            label="Post Here",
+            style=discord.ButtonStyle.primary,
+        )
+        self.parent_view = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            view=PublicOAuthButtonView(
+                title="Authorize with Discord",
+                description="Use the button below to authorize the requested account access.",
+                url=self.parent_view.url,
+                accent_color=ACCENT_DEFAULT,
             )
         )
 
@@ -350,7 +373,7 @@ class GuildsButton(discord.ui.Button):
                 self.panel.oauth_client.fetch_guilds,
                 self.panel.owner_id,
             )
-            view = build_list_view("Linked Account Guilds", guilds, "guild")
+            view = GuildsPageView(guilds, self.panel.owner_id)
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
 
@@ -461,6 +484,102 @@ class DisconnectButton(discord.ui.Button):
                 None,
                 can_join_here=interaction.guild is not None,
                 note=note,
+            )
+        )
+
+
+class GuildsPageView(discord.ui.LayoutView):
+    page_size = 2
+
+    def __init__(
+        self,
+        guilds: list[dict[str, Any]],
+        owner_id: int,
+        page: int = 0,
+    ):
+        super().__init__(timeout=300)
+        self.guilds = guilds
+        self.owner_id = int(owner_id)
+        self.page = max(0, min(page, self.max_page))
+
+        if not guilds:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay("## Linked Account Guilds\nNo guilds were returned."),
+                    accent_color=ACCENT_MUTED,
+                )
+            )
+            return
+
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(
+                f"## Linked Account Guilds\nPage {self.page + 1} of {self.max_page + 1}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ]
+
+        for guild in self.current_guilds:
+            children.append(guild_section(guild))
+
+        children.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    GuildPageButton(self, -1),
+                    GuildPageButton(self, 1),
+                ),
+            ]
+        )
+
+        self.add_item(
+            discord.ui.Container(
+                *children,
+                accent_color=ACCENT_DEFAULT,
+            )
+        )
+
+    @property
+    def current_guilds(self) -> list[dict[str, Any]]:
+        start = self.page * self.page_size
+        return self.guilds[start : start + self.page_size]
+
+    @property
+    def max_page(self) -> int:
+        if not self.guilds:
+            return 0
+        return (len(self.guilds) - 1) // self.page_size
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This guild list belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class GuildPageButton(discord.ui.Button):
+    def __init__(self, guilds_view: GuildsPageView, direction: int):
+        self.guilds_view = guilds_view
+        self.direction = direction
+        label = "Previous" if direction < 0 else "Next"
+        disabled = (
+            guilds_view.page <= 0 if direction < 0 else guilds_view.page >= guilds_view.max_page
+        )
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            view=GuildsPageView(
+                self.guilds_view.guilds,
+                self.guilds_view.owner_id,
+                self.guilds_view.page + self.direction,
             )
         )
 
@@ -577,6 +696,71 @@ def build_list_view(
         lines.append(f"Showing 10 of {len(items)} returned {item_name}s.")
 
     return TextContainerView(title, "\n".join(lines), ACCENT_DEFAULT)
+
+
+def guild_section(guild: dict[str, Any]) -> discord.ui.Section:
+    return discord.ui.Section(
+        guild_text(guild),
+        accessory=discord.ui.Thumbnail(guild_icon_url(guild)),
+    )
+
+
+def guild_text(guild: dict[str, Any]) -> str:
+    permissions = guild_permissions(guild)
+    lines = [
+        f"### {guild.get('name') or 'Unknown server'}",
+        f"**ID:** `{guild.get('id', 'unknown')}`",
+        f"**Owner:** {format_optional_bool(guild.get('owner'))}",
+        f"**Permissions:** {permissions}",
+    ]
+
+    approximate_members = guild.get("approximate_member_count")
+    approximate_presence = guild.get("approximate_presence_count")
+    if approximate_members is not None:
+        lines.append(f"**Approx. members:** {approximate_members}")
+    if approximate_presence is not None:
+        lines.append(f"**Approx. online:** {approximate_presence}")
+
+    features = guild.get("features") or []
+    if features:
+        lines.append(f"**Features:** {', '.join(features[:4])}")
+
+    return "\n".join(lines)
+
+
+def guild_icon_url(guild: dict[str, Any]) -> str:
+    guild_id = guild.get("id")
+    icon_hash = guild.get("icon")
+    if guild_id and icon_hash:
+        extension = "gif" if str(icon_hash).startswith("a_") else "webp"
+        return f"https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.{extension}?size=128"
+
+    return "https://cdn.discordapp.com/embed/avatars/0.png"
+
+
+def guild_permissions(guild: dict[str, Any]) -> str:
+    raw_permissions = guild.get("permissions")
+    if raw_permissions is None:
+        return "Unknown"
+
+    try:
+        permissions = discord.Permissions(int(raw_permissions))
+    except (TypeError, ValueError):
+        return f"`{raw_permissions}`"
+
+    labels = []
+    if permissions.administrator:
+        labels.append("Administrator")
+    if permissions.manage_guild:
+        labels.append("Manage Server")
+    if permissions.manage_channels:
+        labels.append("Manage Channels")
+    if permissions.manage_roles:
+        labels.append("Manage Roles")
+
+    if labels:
+        return ", ".join(labels)
+    return f"`{raw_permissions}`"
 
 
 def build_faq_view() -> discord.ui.LayoutView:
