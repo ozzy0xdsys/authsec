@@ -13,7 +13,7 @@ AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
   - show whether MFA is enabled when Discord includes `mfa_enabled` in the OAuth user payload
   - list guilds when the `guilds` scope is granted
   - list connections when the `connections` scope is granted
-  - list relationships when `relationships.read` is granted and Discord has approved the application for that scope
+  - list relationships when the `relationships.read` scope is granted
   - add the linked account to the current server when `guilds.join` is granted
   - disconnect and revoke the token
 - `/faq` explains the bot behavior.

@@ -492,7 +492,7 @@ def oauth_scope_options() -> list[discord.SelectOption]:
         discord.SelectOption(
             label="Relationships",
             value="relationships.read",
-            description="Requires Discord approval before it works.",
+            description="Allow /panel to list linked relationships.",
         ),
     ]
 
