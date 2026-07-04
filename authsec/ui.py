@@ -843,6 +843,56 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             value="relationships.read",
             description="Allow /panel to list linked relationships.",
         ),
+        discord.SelectOption(
+            label="OpenID",
+            value="openid",
+            description="Return basic OpenID identity data during authorization.",
+        ),
+        discord.SelectOption(
+            label="App Builds",
+            value="applications.builds.read",
+            description="Read build data for the linked account applications.",
+        ),
+        discord.SelectOption(
+            label="App Commands",
+            value="applications.commands",
+            description="Install this app's commands in authorized contexts.",
+        ),
+        discord.SelectOption(
+            label="Command Permissions",
+            value="applications.commands.permissions.update",
+            description="Update this app's command permissions in allowed servers.",
+        ),
+        discord.SelectOption(
+            label="Entitlements",
+            value="applications.entitlements",
+            description="Read entitlements for the linked account applications.",
+        ),
+        discord.SelectOption(
+            label="Store Management",
+            value="applications.store.update",
+            description="Read and update store data for account applications.",
+        ),
+        discord.SelectOption(
+            label="Group DM Join",
+            value="gdm.join",
+            description="Allow adding the linked account to managed group DMs.",
+        ),
+        discord.SelectOption(
+            label="Messages Read",
+            value="messages.read",
+            description="Read messages available to this app authorization.",
+        ),
+        discord.SelectOption(
+            label="Role Connections",
+            value="role_connections.write",
+            description="Update this app role connection metadata.",
+        ),
+        discord.SelectOption(
+            label="Incoming Webhook",
+            value="webhook.incoming",
+            description="Create an incoming webhook during authorization.",
+        ),
     ]
 
 
