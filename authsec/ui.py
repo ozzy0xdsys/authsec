@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -274,6 +275,18 @@ class PanelView(discord.ui.LayoutView):
                         disabled=not has_account
                         or not account.has_scope("relationships.read"),
                     ),
+                    MessagesButton(
+                        self,
+                        disabled=not has_account or not account.has_scope("messages.read"),
+                    ),
+                    WebhookMessageButton(
+                        self,
+                        disabled=(
+                            not has_account
+                            or not account.has_scope("webhook.incoming")
+                            or not account.has_webhook
+                        ),
+                    ),
                     JoinServerButton(
                         self,
                         disabled=(
@@ -283,6 +296,18 @@ class PanelView(discord.ui.LayoutView):
                         ),
                     ),
                     DisconnectButton(self, disabled=not has_account),
+                ),
+                discord.ui.ActionRow(
+                    EntitlementsButton(
+                        self,
+                        disabled=not has_account
+                        or not account.has_scope("applications.entitlements"),
+                    ),
+                    RoleConnectionButton(
+                        self,
+                        disabled=not has_account
+                        or not account.has_scope("role_connections.write"),
+                    ),
                 ),
                 accent_color=ACCENT_DEFAULT if has_account else ACCENT_MUTED,
             )
@@ -439,6 +464,223 @@ class RelationshipsButton(discord.ui.Button):
             view = build_error_view(str(exc))
 
         await interaction.followup.send(view=view, ephemeral=True)
+
+
+class MessagesButton(discord.ui.Button):
+    def __init__(self, panel: PanelView, disabled: bool):
+        super().__init__(
+            label="Messages",
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+        self.panel = panel
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            messages = await fetch_recent_channel_messages(interaction, 20)
+            view = MessagesPageView(
+                messages,
+                self.panel.owner_id,
+                message_channel_name(interaction.channel),
+            )
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
+class WebhookMessageButton(discord.ui.Button):
+    def __init__(self, panel: PanelView, disabled: bool):
+        super().__init__(
+            label="Webhook",
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+        self.panel = panel
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            WebhookMessageModal(self.panel.oauth_client, self.panel.owner_id)
+        )
+
+
+class WebhookMessageModal(discord.ui.Modal, title="Webhook Message"):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__()
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.content_input = discord.ui.TextInput(
+            label="Message",
+            placeholder="Text to send through the OAuth webhook.",
+            style=discord.TextStyle.paragraph,
+            max_length=2000,
+        )
+        self.username_input = discord.ui.TextInput(
+            label="Webhook Username",
+            placeholder="Optional display name for this message.",
+            required=False,
+            max_length=80,
+        )
+        self.add_item(self.content_input)
+        self.add_item(self.username_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            message = await asyncio.to_thread(
+                self.oauth_client.send_webhook_message,
+                self.owner_id,
+                str(self.content_input.value),
+                str(self.username_input.value or ""),
+            )
+            view = TextContainerView("Webhook Sent", message, ACCENT_SUCCESS)
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+
+class EntitlementsButton(discord.ui.Button):
+    def __init__(self, panel: PanelView, disabled: bool):
+        super().__init__(
+            label="Entitlements",
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+        self.panel = panel
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            entitlements = await asyncio.to_thread(
+                self.panel.oauth_client.fetch_entitlements,
+                self.panel.owner_id,
+            )
+            view = EntitlementsPageView(entitlements, self.panel.owner_id)
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
+class RoleConnectionButton(discord.ui.Button):
+    def __init__(self, panel: PanelView, disabled: bool):
+        super().__init__(
+            label="Role Connection",
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+        self.panel = panel
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            role_connection = await asyncio.to_thread(
+                self.panel.oauth_client.fetch_role_connection,
+                self.panel.owner_id,
+            )
+            view = RoleConnectionView(
+                self.panel.oauth_client,
+                self.panel.owner_id,
+                role_connection,
+            )
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
+class RoleConnectionView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        oauth_client: DiscordOAuthClient,
+        owner_id: int,
+        role_connection: dict[str, Any],
+    ):
+        super().__init__(timeout=300)
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(role_connection_text(role_connection)),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(UpdateRoleConnectionButton(self)),
+                accent_color=ACCENT_DEFAULT,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This role connection belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class UpdateRoleConnectionButton(discord.ui.Button):
+    def __init__(self, role_view: RoleConnectionView):
+        super().__init__(
+            label="Update",
+            style=discord.ButtonStyle.primary,
+        )
+        self.role_view = role_view
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            RoleConnectionModal(self.role_view.oauth_client, self.role_view.owner_id)
+        )
+
+
+class RoleConnectionModal(discord.ui.Modal, title="Role Connection"):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__()
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.platform_name_input = discord.ui.TextInput(
+            label="Platform Name",
+            placeholder="Optional platform name.",
+            required=False,
+            max_length=50,
+        )
+        self.platform_username_input = discord.ui.TextInput(
+            label="Platform Username",
+            placeholder="Optional platform username.",
+            required=False,
+            max_length=100,
+        )
+        self.metadata_input = discord.ui.TextInput(
+            label="Metadata JSON",
+            placeholder='Example: {"level": "10", "rank": "gold"}',
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+        )
+        self.add_item(self.platform_name_input)
+        self.add_item(self.platform_username_input)
+        self.add_item(self.metadata_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            metadata = parse_metadata_input(self.metadata_input.value)
+            role_connection = await asyncio.to_thread(
+                self.oauth_client.update_role_connection,
+                self.owner_id,
+                clean_optional_text(self.platform_name_input.value),
+                clean_optional_text(self.platform_username_input.value),
+                metadata,
+            )
+            view = RoleConnectionView(
+                self.oauth_client,
+                self.owner_id,
+                role_connection,
+            )
+        except (DiscordApiError, ValueError) as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 
 class JoinServerButton(discord.ui.Button):
@@ -808,6 +1050,211 @@ class RelationshipPageButton(discord.ui.Button):
         )
 
 
+class MessagesPageView(discord.ui.LayoutView):
+    page_size = 4
+
+    def __init__(
+        self,
+        messages: list[dict[str, Any]],
+        owner_id: int,
+        channel_name: str,
+        page: int = 0,
+    ):
+        super().__init__(timeout=300)
+        self.messages = messages
+        self.owner_id = int(owner_id)
+        self.channel_name = channel_name
+        self.page = max(0, min(page, self.max_page))
+
+        if not messages:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay(
+                        f"## Recent Messages\nNo messages were returned for {channel_name}."
+                    ),
+                    accent_color=ACCENT_MUTED,
+                )
+            )
+            return
+
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(
+                f"## Recent Messages\n{channel_name}\nPage {self.page + 1} of {self.max_page + 1}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ]
+
+        for index, message in enumerate(self.current_messages):
+            children.append(discord.ui.TextDisplay(message_text(message)))
+            if index < len(self.current_messages) - 1:
+                children.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        children.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    MessagePageButton(self, -1),
+                    MessagePageButton(self, 1),
+                ),
+            ]
+        )
+
+        self.add_item(
+            discord.ui.Container(
+                *children,
+                accent_color=ACCENT_DEFAULT,
+            )
+        )
+
+    @property
+    def current_messages(self) -> list[dict[str, Any]]:
+        start = self.page * self.page_size
+        return self.messages[start : start + self.page_size]
+
+    @property
+    def max_page(self) -> int:
+        if not self.messages:
+            return 0
+        return (len(self.messages) - 1) // self.page_size
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This message list belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class MessagePageButton(discord.ui.Button):
+    def __init__(self, messages_view: MessagesPageView, direction: int):
+        self.messages_view = messages_view
+        self.direction = direction
+        label = "Previous" if direction < 0 else "Next"
+        disabled = (
+            messages_view.page <= 0
+            if direction < 0
+            else messages_view.page >= messages_view.max_page
+        )
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            view=MessagesPageView(
+                self.messages_view.messages,
+                self.messages_view.owner_id,
+                self.messages_view.channel_name,
+                self.messages_view.page + self.direction,
+            )
+        )
+
+
+class EntitlementsPageView(discord.ui.LayoutView):
+    page_size = 3
+
+    def __init__(
+        self,
+        entitlements: list[dict[str, Any]],
+        owner_id: int,
+        page: int = 0,
+    ):
+        super().__init__(timeout=300)
+        self.entitlements = entitlements
+        self.owner_id = int(owner_id)
+        self.page = max(0, min(page, self.max_page))
+
+        if not entitlements:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay("## Entitlements\nNo entitlements were returned."),
+                    accent_color=ACCENT_MUTED,
+                )
+            )
+            return
+
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(
+                f"## Entitlements\nPage {self.page + 1} of {self.max_page + 1}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ]
+
+        for index, entitlement in enumerate(self.current_entitlements):
+            children.append(discord.ui.TextDisplay(entitlement_text(entitlement)))
+            if index < len(self.current_entitlements) - 1:
+                children.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        children.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    EntitlementPageButton(self, -1),
+                    EntitlementPageButton(self, 1),
+                ),
+            ]
+        )
+
+        self.add_item(
+            discord.ui.Container(
+                *children,
+                accent_color=ACCENT_DEFAULT,
+            )
+        )
+
+    @property
+    def current_entitlements(self) -> list[dict[str, Any]]:
+        start = self.page * self.page_size
+        return self.entitlements[start : start + self.page_size]
+
+    @property
+    def max_page(self) -> int:
+        if not self.entitlements:
+            return 0
+        return (len(self.entitlements) - 1) // self.page_size
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This entitlement list belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class EntitlementPageButton(discord.ui.Button):
+    def __init__(self, entitlement_view: EntitlementsPageView, direction: int):
+        self.entitlement_view = entitlement_view
+        self.direction = direction
+        label = "Previous" if direction < 0 else "Next"
+        disabled = (
+            entitlement_view.page <= 0
+            if direction < 0
+            else entitlement_view.page >= entitlement_view.max_page
+        )
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            view=EntitlementsPageView(
+                self.entitlement_view.entitlements,
+                self.entitlement_view.owner_id,
+                self.entitlement_view.page + self.direction,
+            )
+        )
+
+
 def oauth_scope_options() -> list[discord.SelectOption]:
     return [
         discord.SelectOption(
@@ -852,16 +1299,6 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             label="App Builds",
             value="applications.builds.read",
             description="Read build data for the linked account applications.",
-        ),
-        discord.SelectOption(
-            label="App Commands",
-            value="applications.commands",
-            description="Install this app's commands in authorized contexts.",
-        ),
-        discord.SelectOption(
-            label="Command Permissions",
-            value="applications.commands.permissions.update",
-            description="Update this app's command permissions in allowed servers.",
         ),
         discord.SelectOption(
             label="Entitlements",
@@ -917,6 +1354,8 @@ def panel_text(account: OAuthAccount | None, note: str | None = None) -> str:
         f"**Token expires:** <t:{account.expires_at}:R>",
         f"**Last updated:** <t:{account.updated_at}:R>",
     ]
+    if account.has_scope("webhook.incoming"):
+        lines.append(f"**OAuth webhook:** {webhook_status_text(account)}")
     if note:
         lines.extend(["", f"**Note:** {note}"])
     return "\n".join(lines)
@@ -1102,6 +1541,64 @@ def can_show_guild_join_dates(account: OAuthAccount | None) -> bool:
     return bool(account and account.has_scope("guilds.members.read"))
 
 
+async def fetch_recent_channel_messages(
+    interaction: discord.Interaction,
+    limit: int,
+) -> list[dict[str, Any]]:
+    channel = interaction.channel
+    if channel is None or not hasattr(channel, "history"):
+        raise DiscordApiError("No readable channel was found.", 400)
+
+    guild = interaction.guild
+    if guild is not None and hasattr(channel, "permissions_for"):
+        member = getattr(guild, "me", None)
+        if member is None:
+            client_user = getattr(getattr(interaction, "client", None), "user", None)
+            if client_user is not None:
+                member = guild.get_member(client_user.id)
+
+        if member is not None:
+            permissions = channel.permissions_for(member)
+            if not permissions.view_channel or not permissions.read_message_history:
+                raise DiscordApiError("The bot cannot read message history in this channel.", 403)
+
+    messages: list[dict[str, Any]] = []
+    try:
+        async for message in channel.history(limit=limit):
+            messages.append(message_snapshot(message))
+    except discord.Forbidden as exc:
+        raise DiscordApiError("The bot cannot read message history in this channel.", 403) from exc
+    except discord.HTTPException as exc:
+        raise DiscordApiError(f"Discord message history request failed: {exc}") from exc
+
+    return messages
+
+
+def message_snapshot(message: discord.Message) -> dict[str, Any]:
+    return {
+        "id": str(message.id),
+        "author_id": str(message.author.id),
+        "author_name": str(message.author.display_name),
+        "content": message.content or "",
+        "created_at": message.created_at,
+        "attachments": [attachment.url for attachment in message.attachments[:3]],
+        "embed_count": len(message.embeds),
+        "jump_url": message.jump_url,
+    }
+
+
+def message_channel_name(channel: Any) -> str:
+    if channel is None:
+        return "current channel"
+    mention = getattr(channel, "mention", None)
+    if mention:
+        return str(mention)
+    name = getattr(channel, "name", None)
+    if name:
+        return f"#{name}"
+    return "current channel"
+
+
 async def fetch_guild_page_member_details(
     oauth_client: DiscordOAuthClient,
     owner_id: int,
@@ -1250,6 +1747,146 @@ def relationship_type_label(relationship: dict[str, Any]) -> str:
         5: "Implicit",
     }
     return labels.get(value, str(value))
+
+
+def message_text(message: dict[str, Any]) -> str:
+    content = safe_discord_text(message.get("content") or "")
+    if not content:
+        details = []
+        if message.get("attachments"):
+            details.append(f"{len(message['attachments'])} attachment(s)")
+        if message.get("embed_count"):
+            details.append(f"{message['embed_count']} embed(s)")
+        content = ", ".join(details) or "No text content returned."
+
+    lines = [
+        f"### {safe_discord_text(message.get('author_name') or 'Unknown user')}",
+        f"**Author ID:** `{message.get('author_id', 'unknown')}`",
+        f"**Message ID:** `{message.get('id', 'unknown')}`",
+        f"**Sent:** {format_time_value(message.get('created_at'))}",
+        f"**Content:** {truncate_text(content, 900)}",
+    ]
+    attachments = message.get("attachments") or []
+    if attachments:
+        lines.append("**Attachments:** " + ", ".join(str(url) for url in attachments[:3]))
+    jump_url = message.get("jump_url")
+    if jump_url:
+        lines.append(f"**Link:** {jump_url}")
+    return "\n".join(lines)
+
+
+def entitlement_text(entitlement: dict[str, Any]) -> str:
+    lines = [
+        f"### Entitlement `{entitlement.get('id', 'unknown')}`",
+        f"**SKU:** `{entitlement.get('sku_id', 'unknown')}`",
+        f"**Type:** {entitlement_type_label(entitlement.get('type'))}",
+        f"**Deleted:** {format_optional_bool(entitlement.get('deleted'))}",
+    ]
+    if "consumed" in entitlement:
+        lines.append(f"**Consumed:** {format_optional_bool(entitlement.get('consumed'))}")
+    if entitlement.get("user_id"):
+        lines.append(f"**User ID:** `{entitlement['user_id']}`")
+    if entitlement.get("guild_id"):
+        lines.append(f"**Guild ID:** `{entitlement['guild_id']}`")
+    if entitlement.get("starts_at"):
+        lines.append(f"**Starts:** {format_time_value(entitlement['starts_at'])}")
+    if entitlement.get("ends_at"):
+        lines.append(f"**Ends:** {format_time_value(entitlement['ends_at'])}")
+    return "\n".join(lines)
+
+
+def entitlement_type_label(value: Any) -> str:
+    labels = {
+        1: "Purchase",
+        2: "Premium Subscription",
+        3: "Developer Gift",
+        4: "Test Mode Purchase",
+        5: "Free Purchase",
+        6: "User Gift",
+        7: "Premium Purchase",
+        8: "Application Subscription",
+    }
+    try:
+        return labels.get(int(value), str(value))
+    except (TypeError, ValueError):
+        return "Unknown"
+
+
+def role_connection_text(role_connection: dict[str, Any]) -> str:
+    platform_name = role_connection.get("platform_name") or "None"
+    platform_username = role_connection.get("platform_username") or "None"
+    lines = [
+        "## Role Connection",
+        f"**Platform:** {safe_discord_text(platform_name)}",
+        f"**Username:** {safe_discord_text(platform_username)}",
+    ]
+
+    metadata = role_connection.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        lines.append("")
+        lines.append("**Metadata:**")
+        for key, value in list(metadata.items())[:10]:
+            lines.append(
+                f"- `{safe_discord_text(key)}`: {truncate_text(safe_discord_text(value), 100)}"
+            )
+    else:
+        lines.append("**Metadata:** None")
+
+    return "\n".join(lines)
+
+
+def parse_metadata_input(value: Any) -> dict[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return {}
+
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Metadata must be valid JSON.") from exc
+
+    if not isinstance(decoded, dict):
+        raise ValueError("Metadata must be a JSON object.")
+
+    metadata: dict[str, str] = {}
+    for key, item in decoded.items():
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        value_text = str(item).strip()
+        if len(value_text) > 100:
+            raise ValueError("Metadata values must be 100 characters or less.")
+        metadata[key_text] = value_text
+    return metadata
+
+
+def clean_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def webhook_status_text(account: OAuthAccount) -> str:
+    if not account.has_webhook:
+        return "Not stored"
+
+    parts = ["Stored"]
+    if account.webhook_name:
+        parts.append(safe_discord_text(account.webhook_name))
+    if account.webhook_channel_id:
+        parts.append(f"channel `{account.webhook_channel_id}`")
+    if account.webhook_guild_id:
+        parts.append(f"guild `{account.webhook_guild_id}`")
+    return " - ".join(parts)
+
+
+def safe_discord_text(value: Any) -> str:
+    return discord.utils.escape_mentions(str(value))
+
+
+def truncate_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[: max(0, limit - 3)]}..."
 
 
 def format_time_value(value: Any) -> str:

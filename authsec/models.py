@@ -29,6 +29,11 @@ class OAuthAccount:
     ip_address: str | None
     created_at: int
     updated_at: int
+    webhook_id: str | None = None
+    webhook_token: str | None = None
+    webhook_channel_id: str | None = None
+    webhook_guild_id: str | None = None
+    webhook_name: str | None = None
 
     @property
     def display_name(self) -> str:
@@ -40,6 +45,10 @@ class OAuthAccount:
 
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes
+
+    @property
+    def has_webhook(self) -> bool:
+        return bool(self.webhook_id and self.webhook_token)
 
 
 def scopes_to_json(scopes: list[str]) -> str:

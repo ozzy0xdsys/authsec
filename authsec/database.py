@@ -53,7 +53,12 @@ class AuthDatabase:
                     scopes TEXT NOT NULL,
                     ip_address TEXT,
                     created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
+                    updated_at INTEGER NOT NULL,
+                    webhook_id TEXT,
+                    webhook_token TEXT,
+                    webhook_channel_id TEXT,
+                    webhook_guild_id TEXT,
+                    webhook_name TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS oauth_states (
@@ -78,6 +83,11 @@ class AuthDatabase:
                 """
             )
             self._ensure_column("oauth_accounts", "mfa_enabled", "INTEGER")
+            self._ensure_column("oauth_accounts", "webhook_id", "TEXT")
+            self._ensure_column("oauth_accounts", "webhook_token", "TEXT")
+            self._ensure_column("oauth_accounts", "webhook_channel_id", "TEXT")
+            self._ensure_column("oauth_accounts", "webhook_guild_id", "TEXT")
+            self._ensure_column("oauth_accounts", "webhook_name", "TEXT")
 
     def save_state(
         self,
@@ -167,9 +177,14 @@ class AuthDatabase:
                     scopes,
                     ip_address,
                     created_at,
-                    updated_at
+                    updated_at,
+                    webhook_id,
+                    webhook_token,
+                    webhook_channel_id,
+                    webhook_guild_id,
+                    webhook_name
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(owner_id) DO UPDATE SET
                     discord_user_id = excluded.discord_user_id,
                     username = excluded.username,
@@ -181,6 +196,11 @@ class AuthDatabase:
                     expires_at = excluded.expires_at,
                     scopes = excluded.scopes,
                     ip_address = excluded.ip_address,
+                    webhook_id = excluded.webhook_id,
+                    webhook_token = excluded.webhook_token,
+                    webhook_channel_id = excluded.webhook_channel_id,
+                    webhook_guild_id = excluded.webhook_guild_id,
+                    webhook_name = excluded.webhook_name,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -197,6 +217,11 @@ class AuthDatabase:
                     account.ip_address,
                     account.created_at,
                     account.updated_at,
+                    account.webhook_id,
+                    account.webhook_token,
+                    account.webhook_channel_id,
+                    account.webhook_guild_id,
+                    account.webhook_name,
                 ),
             )
 
@@ -268,6 +293,11 @@ def _account_from_row(row: sqlite3.Row) -> OAuthAccount:
         ip_address=row["ip_address"],
         created_at=int(row["created_at"]),
         updated_at=int(row["updated_at"]),
+        webhook_id=row["webhook_id"],
+        webhook_token=row["webhook_token"],
+        webhook_channel_id=row["webhook_channel_id"],
+        webhook_guild_id=row["webhook_guild_id"],
+        webhook_name=row["webhook_name"],
     )
 
 
