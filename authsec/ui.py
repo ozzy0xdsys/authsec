@@ -450,18 +450,101 @@ class JoinServerButton(discord.ui.Button):
             )
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            message = await asyncio.to_thread(
-                self.panel.oauth_client.add_to_guild,
+        await interaction.response.send_message(
+            view=JoinServerConfirmView(
+                self.panel.oauth_client,
                 self.panel.owner_id,
                 interaction.guild.id,
+                interaction.guild.name,
+            ),
+            ephemeral=True,
+        )
+
+
+class JoinServerConfirmView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        oauth_client: DiscordOAuthClient,
+        owner_id: int,
+        guild_id: int,
+        guild_name: str,
+    ):
+        super().__init__(timeout=120)
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.guild_id = int(guild_id)
+        self.guild_name = guild_name
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "## Confirm Server Join\n"
+                    f"You are about to add the linked account to **{guild_name}**.\n\n"
+                    "Discord will send the linked account a DM about what happened."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    ConfirmJoinServerButton(self),
+                    CancelJoinServerButton(),
+                ),
+                accent_color=ACCENT_DEFAULT,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This confirmation belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class ConfirmJoinServerButton(discord.ui.Button):
+    def __init__(self, confirm_view: JoinServerConfirmView):
+        super().__init__(
+            label="Confirm Join",
+            style=discord.ButtonStyle.success,
+        )
+        self.confirm_view = confirm_view
+
+    async def callback(self, interaction: discord.Interaction):
+        if not bot_has_admin_in_interaction(interaction):
+            await interaction.response.edit_message(
+                view=build_error_view("This server is not available for joining.")
+            )
+            return
+
+        await interaction.response.defer()
+        try:
+            message = await asyncio.to_thread(
+                self.confirm_view.oauth_client.add_to_guild,
+                self.confirm_view.owner_id,
+                self.confirm_view.guild_id,
             )
             view = TextContainerView("Join complete", message, ACCENT_SUCCESS)
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
 
-        await interaction.followup.send(view=view, ephemeral=True)
+        await interaction.edit_original_response(view=view)
+
+
+class CancelJoinServerButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            view=TextContainerView(
+                "Join cancelled",
+                "No action was taken.",
+                ACCENT_MUTED,
+            )
+        )
 
 
 class DisconnectButton(discord.ui.Button):
@@ -711,7 +794,7 @@ def oauth_scope_options() -> list[discord.SelectOption]:
         discord.SelectOption(
             label="Join Guilds",
             value="guilds.join",
-            description="Allow adding the linked account to this server.",
+            description="Allow adding the linked account to servers. Discord sends them a DM.",
         ),
         discord.SelectOption(
             label="Relationships",

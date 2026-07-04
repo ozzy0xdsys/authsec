@@ -16,6 +16,7 @@ AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
   - list connections when the `connections` scope is granted
   - list relationships two per page with user avatars, IDs, decoded relationship types, and pagination
   - add the linked account to the current server when `guilds.join` is granted and the bot has administrator in that server
+  - warn before a server join that Discord will send the linked account a DM
   - disconnect and revoke the token
 - `/faq` explains the bot behavior.
 - `/ping` confirms the bot is alive.
