@@ -382,7 +382,7 @@ class DetailsButton(discord.ui.Button):
                 self.panel.oauth_client.fetch_current_user,
                 self.panel.owner_id,
             )
-            view = build_user_view(user)
+            view = build_user_view(user, self.panel.account)
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
 
@@ -979,7 +979,7 @@ def panel_text(account: OAuthAccount | None, note: str | None = None) -> str:
         "",
         f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
         f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
-        f"**Authorization IP:** `{account.ip_address or 'unknown'}`",
+        f"**IP Address:** `{account.ip_address or 'unknown'}`",
         f"**Access:** {format_scope_list(account.scopes)}",
         f"**Token expires:** <t:{account.expires_at}:R>",
         f"**Last updated:** <t:{account.updated_at}:R>",
@@ -991,12 +991,17 @@ def panel_text(account: OAuthAccount | None, note: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def build_user_view(user: dict[str, Any]) -> discord.ui.LayoutView:
+def build_user_view(
+    user: dict[str, Any],
+    account: OAuthAccount | None = None,
+) -> discord.ui.LayoutView:
     lines = [
         f"**ID:** `{user.get('id', 'unknown')}`",
         f"**Username:** {user.get('username', 'unknown')}",
         f"**Display name:** {user.get('global_name') or 'none'}",
     ]
+    if account is not None:
+        lines.append(f"**IP Address:** `{account.ip_address or 'unknown'}`")
     if "email" in user:
         lines.append(f"**Email:** {user.get('email') or 'none'}")
     if "verified" in user:
@@ -1420,7 +1425,7 @@ def build_linked_dm_view(account: OAuthAccount) -> discord.ui.LayoutView:
                 "",
                 f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
                 f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
-                f"**Authorization IP:** `{account.ip_address or 'unknown'}`",
+                f"**IP Address:** `{account.ip_address or 'unknown'}`",
                 f"**Access:** {format_scope_list(account.scopes)}",
                 f"**Linked:** <t:{int(time.time())}:R>",
             ]
