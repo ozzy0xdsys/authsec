@@ -32,6 +32,26 @@ def command_contexts(func):
     )(func)
 
 
+async def sync_application_commands(
+    tree: app_commands.CommandTree,
+    guild_id: int | None,
+) -> list[app_commands.AppCommand]:
+    synced = await tree.sync()
+
+    if guild_id is not None:
+        try:
+            guild = discord.Object(id=guild_id)
+            tree.clear_commands(guild=guild)
+            await tree.sync(guild=guild)
+            logger.info("Cleared guild-specific application commands for %s", guild_id)
+        except Exception:
+            logger.exception(
+                "Global commands synced, but failed to clear guild-specific commands"
+            )
+
+    return synced
+
+
 class BotRuntime:
     def __init__(self):
         self.client: discord.Client | None = None
@@ -85,15 +105,12 @@ def create_bot(
 
         if settings.discord.sync_commands and not commands_synced:
             try:
-                if settings.discord.guild_id:
-                    guild = discord.Object(id=settings.discord.guild_id)
-                    tree.copy_global_to(guild=guild)
-                    synced = await tree.sync(guild=guild)
-                else:
-                    synced = await tree.sync()
-
+                synced = await sync_application_commands(
+                    tree,
+                    settings.discord.guild_id,
+                )
                 commands_synced = True
-                logger.info("Synced %s application command(s)", len(synced))
+                logger.info("Synced %s global application command(s)", len(synced))
             except Exception:
                 logger.exception("Failed to sync application commands")
 
