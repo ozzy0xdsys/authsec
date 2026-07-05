@@ -70,6 +70,11 @@ class DiscordOAuthClient:
 
         now = int(time.time())
         webhook = _webhook_fields(token.get("webhook"))
+        scopes = resolved_account_scopes(
+            saved_state.scopes,
+            token.get("scope"),
+            webhook,
+        )
         account = OAuthAccount(
             owner_id=saved_state.owner_id,
             discord_user_id=discord_user_id,
@@ -80,7 +85,7 @@ class DiscordOAuthClient:
             refresh_token=refresh_token,
             token_type=str(token.get("token_type", "Bearer")),
             expires_at=now + int(token.get("expires_in", 3600)),
-            scopes=normalize_scopes(token.get("scope", "").split() or saved_state.scopes),
+            scopes=scopes,
             ip_address=ip_address,
             created_at=now,
             updated_at=now,
@@ -119,6 +124,11 @@ class DiscordOAuthClient:
         access_token = _required(token, "access_token")
         user_payload = safe_user_payload(self.fetch_current_user_with_token(access_token))
         webhook = _webhook_fields(token.get("webhook"), account)
+        scopes = resolved_account_scopes(
+            account.scopes,
+            token.get("scope"),
+            webhook,
+        )
         updated = replace(
             account,
             username=user_payload["username"] or account.username,
@@ -132,7 +142,7 @@ class DiscordOAuthClient:
             refresh_token=str(token.get("refresh_token") or account.refresh_token),
             token_type=str(token.get("token_type", account.token_type)),
             expires_at=now + int(token.get("expires_in", 3600)),
-            scopes=normalize_scopes(token.get("scope", "").split() or account.scopes),
+            scopes=scopes,
             updated_at=now,
             **webhook,
         )
@@ -377,6 +387,18 @@ def normalize_scopes(scopes: list[str]) -> list[str]:
         if scope and scope not in cleaned:
             cleaned.append(scope)
     return cleaned
+
+
+def resolved_account_scopes(
+    requested_scopes: list[str],
+    returned_scope: Any,
+    webhook: dict[str, str | None],
+) -> list[str]:
+    returned_scopes = str(returned_scope or "").split()
+    scopes = [*requested_scopes, *returned_scopes]
+    if webhook.get("webhook_id") and webhook.get("webhook_token"):
+        scopes.append("webhook.incoming")
+    return normalize_scopes(scopes)
 
 
 def _bearer_headers(access_token: str) -> dict[str, str]:
