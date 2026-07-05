@@ -29,6 +29,7 @@ class WebSettings:
     port: int = 80
     redirect_uri: str = DEFAULT_REDIRECT_URI
     force_https: bool = True
+    clear_port_before_start: bool = True
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,12 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         ("force_https",),
         ("AUTHSEC_FORCE_HTTPS",),
     )
+    clear_port_before_start = _first_value(
+        web,
+        raw,
+        ("clear_port_before_start", "stop_port_processes"),
+        ("AUTHSEC_CLEAR_WEB_PORT", "AUTHSEC_STOP_PORT_PROCESSES"),
+    )
 
     return Settings(
         discord=DiscordSettings(
@@ -137,6 +144,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
             port=int(web_port or 80),
             redirect_uri=str(redirect_uri or DEFAULT_REDIRECT_URI),
             force_https=_bool_value(force_https, True),
+            clear_port_before_start=_bool_value(clear_port_before_start, True),
         ),
         database=DatabaseSettings(path=database_path),
         oauth=OAuthSettings(

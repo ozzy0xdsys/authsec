@@ -57,6 +57,7 @@ export DISCORD_CLIENT_ID="CLIENT_ID"
 export DISCORD_CLIENT_SECRET="CLIENT_SECRET"
 export AUTHSEC_WEB_PORT="80"
 export AUTHSEC_REDIRECT_URI="https://authsec.xyz/callback"
+export AUTHSEC_CLEAR_WEB_PORT="true"
 ```
 
 ## Database
@@ -103,5 +104,5 @@ sudo systemctl restart authsec
 sudo journalctl -u authsec -f
 ```
 
-If port 80 is already in use, stop the old process or set `AUTHSEC_WEB_PORT` to
-the port your reverse proxy forwards to.
+By default, startup stops any process already listening on the configured web
+port before binding it. Set `AUTHSEC_CLEAR_WEB_PORT=false` to disable that.
