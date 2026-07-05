@@ -282,13 +282,13 @@ class PanelView(discord.ui.LayoutView):
         self.can_join_here = can_join_here
         has_account = self.account is not None
 
+        self.add_item(account_switcher_container(self))
+
         children: list[discord.ui.Item] = [
             discord.ui.TextDisplay(
                 panel_text(
                     self.account,
                     note,
-                    page=self.page,
-                    account_count=len(self.accounts),
                 )
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
@@ -330,17 +330,6 @@ class PanelView(discord.ui.LayoutView):
             ),
         ]
 
-        if len(self.accounts) > 1:
-            children.extend(
-                [
-                    discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                    discord.ui.ActionRow(
-                        PanelPageButton(self, -1),
-                        PanelPageButton(self, 1),
-                    ),
-                ]
-            )
-
         self.add_item(
             discord.ui.Container(
                 *children,
@@ -359,20 +348,18 @@ class PanelView(discord.ui.LayoutView):
         return False
 
 
-class PanelPageButton(discord.ui.Button):
-    def __init__(self, panel: PanelView, direction: int):
+class AccountSwitchButton(discord.ui.Button):
+    def __init__(self, panel: PanelView, account: OAuthAccount, page: int):
         self.panel = panel
-        self.direction = direction
-        label = "Previous" if direction < 0 else "Next"
-        disabled = (
-            panel.page <= 0
-            if direction < 0
-            else panel.page >= len(panel.accounts) - 1
-        )
+        self.page = page
         super().__init__(
-            label=label,
-            style=discord.ButtonStyle.secondary,
-            disabled=disabled,
+            label=account_switch_label(account, page),
+            style=(
+                discord.ButtonStyle.primary
+                if page == panel.page
+                else discord.ButtonStyle.secondary
+            ),
+            disabled=page == panel.page,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -382,7 +369,41 @@ class PanelPageButton(discord.ui.Button):
                 self.panel.owner_id,
                 self.panel.accounts,
                 can_join_here=bot_has_admin_in_interaction(interaction),
-                page=self.panel.page + self.direction,
+                page=self.page,
+            )
+        )
+
+
+class AccountSelect(discord.ui.Select):
+    def __init__(self, panel: PanelView):
+        self.panel = panel
+        super().__init__(
+            placeholder="Choose saved account",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=account_select_label(account),
+                    value=account_select_value(account, index),
+                    description=account_select_description(account, index),
+                    default=index == panel.page,
+                )
+                for index, account in enumerate(panel.accounts)
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            view=PanelView(
+                self.panel.oauth_client,
+                self.panel.owner_id,
+                self.panel.accounts,
+                can_join_here=bot_has_admin_in_interaction(interaction),
+                page=panel_page_for_value(
+                    self.panel.accounts,
+                    self.values[0],
+                    self.panel.page,
+                ),
             )
         )
 
@@ -1057,6 +1078,97 @@ def format_scope_list(scopes: list[str]) -> str:
     return ", ".join(labels) if labels else "Identify"
 
 
+def account_switcher_container(panel: PanelView) -> discord.ui.Container:
+    children: list[discord.ui.Item] = [
+        discord.ui.TextDisplay(account_switcher_text(panel.accounts, panel.page))
+    ]
+
+    if len(panel.accounts) >= 5:
+        children.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(AccountSelect(panel)),
+            ]
+        )
+    elif len(panel.accounts) > 1:
+        children.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    *[
+                        AccountSwitchButton(panel, account, index)
+                        for index, account in enumerate(panel.accounts)
+                    ]
+                ),
+            ]
+        )
+
+    return discord.ui.Container(
+        *children,
+        accent_color=ACCENT_DEFAULT if panel.accounts else ACCENT_MUTED,
+    )
+
+
+def account_switcher_text(accounts: list[OAuthAccount], page: int) -> str:
+    lines = [
+        "## Saved Accounts",
+        f"**Accounts:** `{len(accounts)} / {MAX_ACCOUNTS_PER_OWNER}`",
+    ]
+    if accounts:
+        account = accounts[panel_page_index(accounts, page)]
+        lines.append(
+            f"**Viewing:** {safe_discord_text(account.display_name)} "
+            f"(`{account.discord_user_id}`)"
+        )
+    return "\n".join(lines)
+
+
+def account_switch_label(account: OAuthAccount, page: int) -> str:
+    return truncate_label(f"{page + 1}. {account.display_name}", 80)
+
+
+def account_select_label(account: OAuthAccount) -> str:
+    return truncate_label(account.username or account.display_name, 100)
+
+
+def account_select_description(account: OAuthAccount, page: int) -> str:
+    return truncate_label(f"Saved account {page + 1} - ID {account.discord_user_id}", 100)
+
+
+def account_select_value(account: OAuthAccount, page: int) -> str:
+    if account.account_id is not None:
+        return f"id:{account.account_id}"
+    return f"page:{page}"
+
+
+def panel_page_for_value(
+    accounts: list[OAuthAccount],
+    value: str,
+    fallback: int = 0,
+) -> int:
+    if value.startswith("id:"):
+        try:
+            account_id = int(value.removeprefix("id:"))
+        except ValueError:
+            return panel_page_index(accounts, fallback)
+        return panel_page_for_account(accounts, account_id, fallback)
+
+    if value.startswith("page:"):
+        try:
+            return panel_page_index(accounts, int(value.removeprefix("page:")))
+        except ValueError:
+            return panel_page_index(accounts, fallback)
+
+    return panel_page_index(accounts, fallback)
+
+
+def truncate_label(value: str, max_length: int) -> str:
+    text = str(value).strip() or "Unknown"
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 3]}..."
+
+
 def panel_page_index(accounts: list[OAuthAccount], page: int) -> int:
     if not accounts:
         return 0
@@ -1077,8 +1189,6 @@ def panel_page_for_account(
 def panel_text(
     account: OAuthAccount | None,
     note: str | None = None,
-    page: int = 0,
-    account_count: int = 0,
 ) -> str:
     if account is None:
         lines = [
@@ -1095,8 +1205,6 @@ def panel_text(
         "Manage the OAuth account linked to your Discord user. Unavailable actions "
         "stay disabled until the matching access is authorized.",
         "",
-        f"**Stored account:** {page + 1} of {max(1, account_count)} "
-        f"({MAX_ACCOUNTS_PER_OWNER} max)",
         f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
         f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
         f"**IP Address:** `{account.ip_address or 'unknown'}`",

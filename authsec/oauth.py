@@ -75,6 +75,22 @@ class DiscordOAuthClient:
             token.get("scope"),
             webhook,
         )
+        existing_account = self._stored_account_for_discord_user(
+            saved_state.owner_id,
+            discord_user_id,
+        )
+        replaced_scope_authorization = (
+            existing_account is not None
+            and account_scopes_changed(existing_account.scopes, scopes)
+        )
+        if replaced_scope_authorization and not self._revoke_account_tokens(existing_account):
+            self._revoke_tokens_quietly(refresh_token, access_token)
+            raise DiscordApiError(
+                "Could not revoke the existing saved authorization. "
+                "Disconnect it before linking this account with different access.",
+                400,
+            )
+
         account = OAuthAccount(
             owner_id=saved_state.owner_id,
             discord_user_id=discord_user_id,
@@ -97,6 +113,12 @@ class DiscordOAuthClient:
             self._revoke_tokens_quietly(refresh_token, access_token)
             raise DiscordApiError(str(exc), 400) from exc
         self.database.log_event("oauth_connected", saved.owner_id, saved.discord_user_id)
+        if replaced_scope_authorization:
+            self.database.log_event(
+                "oauth_replaced_scopes",
+                saved.owner_id,
+                saved.discord_user_id,
+            )
         return saved
 
     def get_account(
@@ -193,16 +215,7 @@ class DiscordOAuthClient:
         if account is None:
             return False
 
-        revoked = False
-        try:
-            self._revoke_token(account.refresh_token)
-            revoked = True
-        except DiscordApiError:
-            try:
-                self._revoke_token(account.access_token)
-                revoked = True
-            except DiscordApiError:
-                revoked = False
+        revoked = self._revoke_account_tokens(account)
 
         self.database.delete_account(owner_id, account.account_id)
         self.database.log_event("oauth_disconnected", owner_id, account.discord_user_id)
@@ -372,6 +385,16 @@ class DiscordOAuthClient:
             raise DiscordApiError("No linked OAuth account was found.", 404)
         return account
 
+    def _stored_account_for_discord_user(
+        self,
+        owner_id: int,
+        discord_user_id: str,
+    ) -> OAuthAccount | None:
+        for account in self.database.get_accounts(owner_id):
+            if account.discord_user_id == str(discord_user_id):
+                return account
+        return None
+
     def _exchange_code(self, code: str) -> dict[str, Any]:
         return self._request_json(
             "POST",
@@ -415,6 +438,15 @@ class DiscordOAuthClient:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             expected_statuses=(200, 204),
         )
+
+    def _revoke_account_tokens(self, account: OAuthAccount) -> bool:
+        for token in (account.refresh_token, account.access_token):
+            try:
+                self._revoke_token(token)
+                return True
+            except DiscordApiError:
+                continue
+        return False
 
     def _revoke_tokens_quietly(self, *tokens: str) -> None:
         for token in tokens:
@@ -475,6 +507,10 @@ def resolved_account_scopes(
     if webhook.get("webhook_id") and webhook.get("webhook_token"):
         scopes.append("webhook.incoming")
     return normalize_scopes(scopes)
+
+
+def account_scopes_changed(current_scopes: list[str], new_scopes: list[str]) -> bool:
+    return set(normalize_scopes(current_scopes)) != set(normalize_scopes(new_scopes))
 
 
 def _bearer_headers(access_token: str) -> dict[str, str]:

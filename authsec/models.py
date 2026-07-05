@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-MAX_ACCOUNTS_PER_OWNER = 3
+MAX_ACCOUNTS_PER_OWNER = 25
 
 
 @dataclass(frozen=True)
