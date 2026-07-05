@@ -23,6 +23,7 @@ AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
 - `/ping` confirms the bot is alive.
 
 The Discord command UI uses Discord components v2 (`LayoutView`, containers, text displays, and action rows).
+The bot uses slash commands only, so the privileged Message Content intent is not required.
 
 ## Files
 

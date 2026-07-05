@@ -18,7 +18,6 @@ class DiscordSettings:
     token: str
     client_id: str
     client_secret: str
-    command_prefix: str = "!"
     sync_commands: bool = True
     guild_id: int | None = None
 
@@ -135,7 +134,6 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
             token=str(token),
             client_id=str(client_id),
             client_secret=str(client_secret),
-            command_prefix=str(discord.get("command_prefix", "!")),
             sync_commands=bool(discord.get("sync_commands", True)),
             guild_id=_optional_int(discord.get("guild_id")),
         ),

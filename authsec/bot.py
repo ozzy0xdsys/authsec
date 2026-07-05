@@ -5,7 +5,6 @@ import logging
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from .models import OAuthAccount
 from .oauth import DiscordApiError, DiscordOAuthClient
@@ -35,10 +34,10 @@ def command_contexts(func):
 
 class BotRuntime:
     def __init__(self):
-        self.client: commands.Bot | None = None
+        self.client: discord.Client | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
 
-    def bind(self, client: commands.Bot) -> None:
+    def bind(self, client: discord.Client) -> None:
         self.client = client
         self.loop = asyncio.get_running_loop()
 
@@ -72,9 +71,10 @@ def create_bot(
     settings: Settings,
     oauth_client: DiscordOAuthClient,
     runtime: BotRuntime,
-) -> commands.Bot:
+) -> discord.Client:
     intents = discord.Intents.default()
-    bot = commands.Bot(command_prefix=settings.discord.command_prefix, intents=intents)
+    bot = discord.Client(intents=intents)
+    tree = app_commands.CommandTree(bot)
     commands_synced = False
 
     @bot.event
@@ -87,10 +87,10 @@ def create_bot(
             try:
                 if settings.discord.guild_id:
                     guild = discord.Object(id=settings.discord.guild_id)
-                    bot.tree.copy_global_to(guild=guild)
-                    synced = await bot.tree.sync(guild=guild)
+                    tree.copy_global_to(guild=guild)
+                    synced = await tree.sync(guild=guild)
                 else:
-                    synced = await bot.tree.sync()
+                    synced = await tree.sync()
 
                 commands_synced = True
                 logger.info("Synced %s application command(s)", len(synced))
@@ -102,7 +102,7 @@ def create_bot(
             activity=discord.CustomActivity("authsec.xyz"),
         )
 
-    @bot.tree.command(name="setup", description="Create a Discord OAuth authorization link.")
+    @tree.command(name="setup", description="Create a Discord OAuth authorization link.")
     @command_contexts
     async def setup(interaction: discord.Interaction):
         await interaction.response.send_message(
@@ -110,12 +110,12 @@ def create_bot(
             ephemeral=True,
         )
 
-    @bot.tree.command(name="create", description="Post a reusable OAuth button message.")
+    @tree.command(name="create", description="Post a reusable OAuth button message.")
     @command_contexts
     async def create(interaction: discord.Interaction):
         await interaction.response.send_modal(CreateOAuthButtonModal())
 
-    @bot.tree.command(name="panel", description="Manage your linked OAuth account.")
+    @tree.command(name="panel", description="Manage your linked OAuth account.")
     @command_contexts
     async def panel(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -146,12 +146,12 @@ def create_bot(
             ephemeral=True,
         )
 
-    @bot.tree.command(name="faq", description="Explain how the OAuth bot works.")
+    @tree.command(name="faq", description="Explain how the OAuth bot works.")
     @command_contexts
     async def faq(interaction: discord.Interaction):
         await interaction.response.send_message(view=build_faq_view(), ephemeral=True)
 
-    @bot.tree.command(name="ping", description="Check whether the bot is responding.")
+    @tree.command(name="ping", description="Check whether the bot is responding.")
     @command_contexts
     async def ping(interaction: discord.Interaction):
         latency_ms = round(bot.latency * 1000)
