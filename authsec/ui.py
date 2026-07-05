@@ -1308,37 +1308,19 @@ def build_user_view(
 
 
 def build_ip_info_view(payload: dict[str, Any]) -> discord.ui.LayoutView:
-    country = payload.get("country")
-    continent = payload.get("continent")
-    network = payload.get("network") if isinstance(payload.get("network"), dict) else {}
-    risk_flags = (
-        payload.get("risk_flags") if isinstance(payload.get("risk_flags"), dict) else {}
-    )
-
     header_lines = [
         f"**IP Address:** `{safe_optional_text(payload.get('ip')) or 'unknown'}`",
     ]
 
     location_lines = [
-        f"**City:** {format_unknown(payload.get('city'))}",
-        f"**Country:** {format_named_code(country) or 'Unknown'}",
-        f"**Continent:** {format_named_code(continent) or 'Unknown'}",
-        f"**Subdivisions:** {format_subdivisions(payload.get('subdivisions')) or 'Unknown'}",
+        f"**Country:** {format_name_with_code(payload.get('country'), payload.get('country_code'))}",
+        f"**Continent:** {format_name_with_code(payload.get('continent'), payload.get('continent_code'))}",
     ]
 
-    coordinates = format_coordinates(payload) or "Unknown"
-    location_lines.append(f"**Coordinates:** {coordinates}")
-    timezone = format_unknown(payload.get("timezone"))
-    location_lines.append(f"**Timezone:** {timezone}")
-    accuracy_radius = payload.get("accuracy_radius_km")
-    if accuracy_radius is not None:
-        location_lines.append(f"**Accuracy radius:** `{accuracy_radius} km`")
-
     network_lines = [
-        f"**Networks:** {format_network_name(network) or 'Unknown'}",
-        f"**ASN:** {format_asn(network.get('asn'))}",
-        f"**Hosting:** {format_optional_bool(risk_flags.get('hosting'))}",
-        f"**Tor exit:** {format_optional_bool(risk_flags.get('tor_exit'))}",
+        f"**ASN:** {format_plain_asn(payload.get('asn'))}",
+        f"**Network name:** {format_unknown(payload.get('as_name'))}",
+        f"**Network domain:** {format_unknown(payload.get('as_domain'))}",
     ]
 
     header_body = "\n".join(header_lines)
@@ -1704,67 +1686,23 @@ def format_unknown(value: Any, max_length: int = 120) -> str:
     return safe_optional_text(value, max_length) or "Unknown"
 
 
-def format_named_code(value: Any) -> str | None:
-    if not isinstance(value, dict):
-        return safe_optional_text(value)
-
-    name = safe_optional_text(value.get("name"))
-    code = safe_optional_text(value.get("code"), 16)
+def format_name_with_code(name_value: Any, code_value: Any) -> str:
+    name = safe_optional_text(name_value)
+    code = safe_optional_text(code_value, 16)
     if name and code:
         return f"{name} (`{code}`)"
-    return name or (f"`{code}`" if code else None)
+    if name:
+        return name
+    if code:
+        return f"`{code}`"
+    return "Unknown"
 
 
-def format_subdivisions(value: Any) -> str | None:
-    if isinstance(value, list):
-        parts = [
-            format_named_code(item) if isinstance(item, dict) else safe_optional_text(item)
-            for item in value
-        ]
-        return ", ".join(part for part in parts if part) or None
-    return safe_optional_text(value)
-
-
-def format_coordinates(payload: dict[str, Any]) -> str | None:
-    latitude = payload.get("latitude")
-    longitude = payload.get("longitude")
-    if latitude is None or longitude is None:
-        return None
-    return f"`{latitude}, {longitude}`"
-
-
-def format_network(value: dict[str, Any]) -> str | None:
-    isp = safe_optional_text(value.get("isp"))
-    asn = value.get("asn")
-    if isp and asn:
-        return f"{isp} (`ASN {asn}`)"
-    if asn:
-        return f"`ASN {asn}`"
-    return isp
-
-
-def format_network_name(value: dict[str, Any]) -> str | None:
-    return (
-        safe_optional_text(value.get("isp"))
-        or safe_optional_text(value.get("name"))
-        or safe_optional_text(value.get("organization"))
-        or safe_optional_text(value.get("org"))
-    )
-
-
-def format_asn(value: Any) -> str:
-    if value is None:
+def format_plain_asn(value: Any) -> str:
+    text = safe_optional_text(value, 32)
+    if not text:
         return "Unknown"
-    return f"`ASN {safe_optional_text(value, 32) or 'Unknown'}`"
-
-
-def format_risk_flags(value: dict[str, Any]) -> str | None:
-    labels = []
-    if "tor_exit" in value:
-        labels.append(f"Tor exit: {format_optional_bool(value.get('tor_exit'))}")
-    if "hosting" in value:
-        labels.append(f"Hosting: {format_optional_bool(value.get('hosting'))}")
-    return ", ".join(labels) if labels else None
+    return f"`{text}`"
 
 
 def safe_discord_text(value: Any) -> str:

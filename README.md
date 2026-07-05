@@ -59,7 +59,7 @@ export DISCORD_CLIENT_SECRET="CLIENT_SECRET"
 export AUTHSEC_WEB_PORT="80"
 export AUTHSEC_REDIRECT_URI="https://authsec.xyz/callback"
 export AUTHSEC_CLEAR_WEB_PORT="true"
-export AUTHSEC_IPGEO_API_KEY="ipgeo_YOUR_KEY"
+export AUTHSEC_IPINFO_TOKEN="YOUR_IPINFO_TOKEN"
 ```
 
 ## Database

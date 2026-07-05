@@ -44,9 +44,9 @@ class OAuthSettings:
 
 
 @dataclass(frozen=True)
-class IPGeoSettings:
-    api_key: str | None = None
-    base_url: str = "https://api.getipgeo.com"
+class IPInfoSettings:
+    token: str | None = None
+    base_url: str = "https://api.ipinfo.io/lite"
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ class Settings:
     web: WebSettings
     database: DatabaseSettings
     oauth: OAuthSettings
-    ipgeo: IPGeoSettings
+    ipinfo: IPInfoSettings
 
 
 def load_settings(path: Path = CONFIG_PATH) -> Settings:
@@ -65,7 +65,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     web = _dict(raw.get("web"))
     database = _dict(raw.get("database"))
     oauth = _dict(raw.get("oauth"))
-    ipgeo = _dict(raw.get("ipgeo"))
+    ipinfo = _dict(raw.get("ipinfo"))
 
     token = _first_value(
         discord,
@@ -136,17 +136,15 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         ("clear_port_before_start", "stop_port_processes"),
         ("AUTHSEC_CLEAR_WEB_PORT", "AUTHSEC_STOP_PORT_PROCESSES"),
     )
-    ipgeo_api_key = _first_value(
-        ipgeo,
-        raw,
-        ("api_key", "key"),
-        ("AUTHSEC_IPGEO_API_KEY", "IPGEO_API_KEY"),
+    ipinfo_token = (
+        _first_mapping_value(ipinfo, ("token", "api_key", "key"))
+        or _first_mapping_value(raw, ("ipinfo_token", "ipinfo_api_key"))
+        or _first_environment_value(("AUTHSEC_IPINFO_TOKEN", "IPINFO_TOKEN"))
     )
-    ipgeo_base_url = _first_value(
-        ipgeo,
-        raw,
-        ("base_url",),
-        ("AUTHSEC_IPGEO_BASE_URL",),
+    ipinfo_base_url = (
+        _first_mapping_value(ipinfo, ("base_url",))
+        or _first_mapping_value(raw, ("ipinfo_base_url",))
+        or _first_environment_value(("AUTHSEC_IPINFO_BASE_URL",))
     )
 
     return Settings(
@@ -172,9 +170,9 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
             ),
             state_ttl_seconds=int(oauth.get("state_ttl_seconds", 10 * 60)),
         ),
-        ipgeo=IPGeoSettings(
-            api_key=str(ipgeo_api_key).strip() if ipgeo_api_key else None,
-            base_url=str(ipgeo_base_url or "https://api.getipgeo.com").rstrip("/"),
+        ipinfo=IPInfoSettings(
+            token=str(ipinfo_token).strip() if ipinfo_token else None,
+            base_url=str(ipinfo_base_url or "https://api.ipinfo.io/lite").rstrip("/"),
         ),
     )
 
@@ -236,6 +234,20 @@ def _first_value(
         if os.environ.get(key):
             return os.environ[key]
 
+    return None
+
+
+def _first_mapping_value(source: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if source.get(key):
+            return source[key]
+    return None
+
+
+def _first_environment_value(keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        if os.environ.get(key):
+            return os.environ[key]
     return None
 
 
