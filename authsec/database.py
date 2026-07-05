@@ -63,6 +63,7 @@ class AuthDatabase:
                     expires_at INTEGER NOT NULL,
                     scopes TEXT NOT NULL,
                     ip_address TEXT,
+                    user_agent TEXT,
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL,
                     webhook_id TEXT,
@@ -95,6 +96,7 @@ class AuthDatabase:
                 """
             )
             self._ensure_column("oauth_accounts", "mfa_enabled", "INTEGER")
+            self._ensure_column("oauth_accounts", "user_agent", "TEXT")
             self._ensure_column("oauth_accounts", "webhook_id", "TEXT")
             self._ensure_column("oauth_accounts", "webhook_token", "TEXT")
             self._ensure_column("oauth_accounts", "webhook_channel_id", "TEXT")
@@ -327,6 +329,7 @@ class AuthDatabase:
                 expires_at,
                 scopes,
                 ip_address,
+                user_agent,
                 created_at,
                 updated_at,
                 webhook_id,
@@ -335,7 +338,7 @@ class AuthDatabase:
                 webhook_guild_id,
                 webhook_name
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             _account_values(account, account.created_at),
         )
@@ -362,6 +365,7 @@ class AuthDatabase:
                 expires_at = ?,
                 scopes = ?,
                 ip_address = ?,
+                user_agent = ?,
                 created_at = ?,
                 updated_at = ?,
                 webhook_id = ?,
@@ -395,6 +399,7 @@ class AuthDatabase:
                 expires_at INTEGER NOT NULL,
                 scopes TEXT NOT NULL,
                 ip_address TEXT,
+                user_agent TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 webhook_id TEXT,
@@ -420,6 +425,7 @@ class AuthDatabase:
                 expires_at,
                 scopes,
                 ip_address,
+                user_agent,
                 created_at,
                 updated_at,
                 webhook_id,
@@ -440,6 +446,7 @@ class AuthDatabase:
                 expires_at,
                 scopes,
                 ip_address,
+                user_agent,
                 created_at,
                 updated_at,
                 webhook_id,
@@ -482,6 +489,7 @@ def _account_from_row(row: sqlite3.Row) -> OAuthAccount:
         expires_at=int(row["expires_at"]),
         scopes=scopes_from_json(row["scopes"]),
         ip_address=row["ip_address"],
+        user_agent=row["user_agent"],
         created_at=int(row["created_at"]),
         updated_at=int(row["updated_at"]),
         account_id=int(row["id"]),
@@ -506,6 +514,7 @@ def _account_values(account: OAuthAccount, created_at: int) -> tuple:
         account.expires_at,
         scopes_to_json(account.scopes),
         account.ip_address,
+        account.user_agent,
         int(created_at),
         account.updated_at,
         account.webhook_id,

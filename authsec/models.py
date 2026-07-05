@@ -30,6 +30,7 @@ class OAuthAccount:
     expires_at: int
     scopes: list[str]
     ip_address: str | None
+    user_agent: str | None
     created_at: int
     updated_at: int
     account_id: int | None = None

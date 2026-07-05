@@ -1208,6 +1208,7 @@ def panel_text(
         f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
         f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
         f"**IP Address:** `{account.ip_address or 'unknown'}`",
+        f"**User Agent:** {format_user_agent(account.user_agent)}",
         f"**Access:** {format_scope_list(account.scopes)}",
         f"**Token expires:** <t:{account.expires_at}:R>",
         f"**Last updated:** <t:{account.updated_at}:R>",
@@ -1230,6 +1231,7 @@ def build_user_view(
     ]
     if account is not None:
         lines.append(f"**IP Address:** `{account.ip_address or 'unknown'}`")
+        lines.append(f"**User Agent:** {format_user_agent(account.user_agent)}")
     if "email" in user:
         lines.append(f"**Email:** {user.get('email') or 'none'}")
     if "verified" in user:
@@ -1570,6 +1572,12 @@ def webhook_status_text(account: OAuthAccount) -> str:
     return " - ".join(parts)
 
 
+def format_user_agent(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    return discord.utils.escape_markdown(safe_discord_text(truncate_label(value, 300)))
+
+
 def safe_discord_text(value: Any) -> str:
     return discord.utils.escape_mentions(str(value))
 
@@ -1656,6 +1664,7 @@ def build_linked_dm_view(account: OAuthAccount) -> discord.ui.LayoutView:
                 f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
                 f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
                 f"**IP Address:** `{account.ip_address or 'unknown'}`",
+                f"**User Agent:** {format_user_agent(account.user_agent)}",
                 f"**Access:** {format_scope_list(account.scopes)}",
                 f"**Linked:** <t:{int(time.time())}:R>",
             ]

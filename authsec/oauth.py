@@ -54,6 +54,7 @@ class DiscordOAuthClient:
         code: str,
         state: str,
         ip_address: str | None,
+        user_agent: str | None,
     ) -> OAuthAccount:
         saved_state = self.database.consume_state(state)
         if saved_state is None:
@@ -103,6 +104,7 @@ class DiscordOAuthClient:
             expires_at=now + int(token.get("expires_in", 3600)),
             scopes=scopes,
             ip_address=ip_address,
+            user_agent=user_agent,
             created_at=now,
             updated_at=now,
             **webhook,

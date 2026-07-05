@@ -52,6 +52,7 @@ def create_web_app(oauth_client: DiscordOAuthClient, bot_runtime: BotRuntime) ->
                 code=code,
                 state=state,
                 ip_address=_client_ip(),
+                user_agent=_user_agent(),
             )
         except DiscordApiError as exc:
             return _page("Authorization failed", str(exc), exc.status_code)
@@ -72,6 +73,13 @@ def _client_ip() -> str | None:
     if forwarded_for:
         return forwarded_for.split(",", 1)[0].strip()
     return request.remote_addr
+
+
+def _user_agent() -> str | None:
+    value = request.headers.get("User-Agent")
+    if not value:
+        return None
+    return value.strip()[:500] or None
 
 
 def _is_local_request() -> bool:
