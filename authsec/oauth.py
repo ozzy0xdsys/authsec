@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from .database import AuthDatabase
+from .database import AccountLimitError, AuthDatabase
 from .models import OAuthAccount, safe_user_payload
 from .settings import Settings
 
@@ -91,7 +91,11 @@ class DiscordOAuthClient:
             updated_at=now,
             **webhook,
         )
-        saved = self.database.save_account(account)
+        try:
+            saved = self.database.save_account(account)
+        except AccountLimitError as exc:
+            self._revoke_tokens_quietly(refresh_token, access_token)
+            raise DiscordApiError(str(exc), 400) from exc
         self.database.log_event("oauth_connected", saved.owner_id, saved.discord_user_id)
         return saved
 
@@ -99,8 +103,9 @@ class DiscordOAuthClient:
         self,
         owner_id: int,
         refresh_if_needed: bool = True,
+        account_id: int | None = None,
     ) -> OAuthAccount | None:
-        account = self.database.get_account(owner_id)
+        account = self.database.get_account(owner_id, account_id)
         if account is None or not refresh_if_needed:
             return account
 
@@ -108,13 +113,42 @@ class DiscordOAuthClient:
         if seconds_left > self.settings.oauth.refresh_before_expiry_seconds:
             return account
 
-        return self.refresh_account(owner_id, force=True)
+        return self.refresh_account(owner_id, force=True, account_id=account.account_id)
 
-    def refresh_account(self, owner_id: int, force: bool = False) -> OAuthAccount:
-        account = self.database.get_account(owner_id)
+    def get_accounts(
+        self,
+        owner_id: int,
+        refresh_if_needed: bool = True,
+    ) -> list[OAuthAccount]:
+        accounts = self.database.get_accounts(owner_id)
+        if not refresh_if_needed:
+            return accounts
+
+        refreshed = []
+        for account in accounts:
+            try:
+                refreshed.append(self._refresh_loaded_account(account, force=False))
+            except DiscordApiError:
+                refreshed.append(account)
+        return refreshed
+
+    def refresh_account(
+        self,
+        owner_id: int,
+        force: bool = False,
+        account_id: int | None = None,
+    ) -> OAuthAccount:
+        account = self.database.get_account(owner_id, account_id)
         if account is None:
             raise DiscordApiError("No linked OAuth account was found.", 404)
 
+        return self._refresh_loaded_account(account, force=force)
+
+    def _refresh_loaded_account(
+        self,
+        account: OAuthAccount,
+        force: bool = False,
+    ) -> OAuthAccount:
         seconds_left = account.expires_at - int(time.time())
         if not force and seconds_left > self.settings.oauth.refresh_before_expiry_seconds:
             return account
@@ -150,8 +184,12 @@ class DiscordOAuthClient:
         self.database.log_event("oauth_refreshed", saved.owner_id, saved.discord_user_id)
         return saved
 
-    def disconnect_account(self, owner_id: int) -> bool:
-        account = self.database.get_account(owner_id)
+    def disconnect_account(
+        self,
+        owner_id: int,
+        account_id: int | None = None,
+    ) -> bool:
+        account = self.database.get_account(owner_id, account_id)
         if account is None:
             return False
 
@@ -166,12 +204,16 @@ class DiscordOAuthClient:
             except DiscordApiError:
                 revoked = False
 
-        self.database.delete_account(owner_id)
+        self.database.delete_account(owner_id, account.account_id)
         self.database.log_event("oauth_disconnected", owner_id, account.discord_user_id)
         return revoked
 
-    def fetch_current_user(self, owner_id: int) -> dict[str, Any]:
-        account = self._required_account(owner_id)
+    def fetch_current_user(
+        self,
+        owner_id: int,
+        account_id: int | None = None,
+    ) -> dict[str, Any]:
+        account = self._required_account(owner_id, account_id)
         return self.fetch_current_user_with_token(account.access_token)
 
     def fetch_current_user_with_token(self, access_token: str) -> dict[str, Any]:
@@ -181,8 +223,12 @@ class DiscordOAuthClient:
             headers=_bearer_headers(access_token),
         )
 
-    def fetch_guilds(self, owner_id: int) -> list[dict[str, Any]]:
-        account = self._required_account(owner_id)
+    def fetch_guilds(
+        self,
+        owner_id: int,
+        account_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        account = self._required_account(owner_id, account_id)
         _require_scope(account, "guilds")
         payload = self._request_json(
             "GET",
@@ -198,8 +244,9 @@ class DiscordOAuthClient:
         self,
         owner_id: int,
         guild_ids: list[str],
+        account_id: int | None = None,
     ) -> dict[str, dict[str, Any]]:
-        account = self._required_account(owner_id)
+        account = self._required_account(owner_id, account_id)
         _require_scope(account, "guilds.members.read")
 
         details = {}
@@ -221,8 +268,12 @@ class DiscordOAuthClient:
 
         return details
 
-    def fetch_connections(self, owner_id: int) -> list[dict[str, Any]]:
-        account = self._required_account(owner_id)
+    def fetch_connections(
+        self,
+        owner_id: int,
+        account_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        account = self._required_account(owner_id, account_id)
         _require_scope(account, "connections")
         payload = self._request_json(
             "GET",
@@ -233,8 +284,12 @@ class DiscordOAuthClient:
             return payload
         raise DiscordApiError("Discord returned an unexpected connection list.", 502)
 
-    def fetch_relationships(self, owner_id: int) -> list[dict[str, Any]]:
-        account = self._required_account(owner_id)
+    def fetch_relationships(
+        self,
+        owner_id: int,
+        account_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        account = self._required_account(owner_id, account_id)
         _require_scope(account, "relationships.read")
         payload = self._request_json(
             "GET",
@@ -247,8 +302,13 @@ class DiscordOAuthClient:
             return payload["relationships"]
         raise DiscordApiError("Discord returned an unexpected relationship list.", 502)
 
-    def add_to_guild(self, owner_id: int, guild_id: int) -> str:
-        account = self._required_account(owner_id)
+    def add_to_guild(
+        self,
+        owner_id: int,
+        guild_id: int,
+        account_id: int | None = None,
+    ) -> str:
+        account = self._required_account(owner_id, account_id)
         _require_scope(account, "guilds.join")
 
         self._request_json(
@@ -269,8 +329,9 @@ class DiscordOAuthClient:
         owner_id: int,
         content: str,
         username: str | None = None,
+        account_id: int | None = None,
     ) -> str:
-        account = self._required_account(owner_id)
+        account = self._required_account(owner_id, account_id)
         _require_scope(account, "webhook.incoming")
         if not account.has_webhook:
             raise DiscordApiError("No OAuth webhook was stored for this account.", 404)
@@ -297,8 +358,16 @@ class DiscordOAuthClient:
             return f"Webhook message sent. Message ID: `{message_id}`"
         return "Webhook message sent."
 
-    def _required_account(self, owner_id: int) -> OAuthAccount:
-        account = self.get_account(owner_id, refresh_if_needed=True)
+    def _required_account(
+        self,
+        owner_id: int,
+        account_id: int | None = None,
+    ) -> OAuthAccount:
+        account = self.get_account(
+            owner_id,
+            refresh_if_needed=True,
+            account_id=account_id,
+        )
         if account is None:
             raise DiscordApiError("No linked OAuth account was found.", 404)
         return account
@@ -346,6 +415,13 @@ class DiscordOAuthClient:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             expected_statuses=(200, 204),
         )
+
+    def _revoke_tokens_quietly(self, *tokens: str) -> None:
+        for token in tokens:
+            try:
+                self._revoke_token(token)
+            except DiscordApiError:
+                continue
 
     def _request_json(
         self,

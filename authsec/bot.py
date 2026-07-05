@@ -139,14 +139,14 @@ def create_bot(
 
         error = None
         try:
-            account = await asyncio.to_thread(
-                oauth_client.get_account,
+            accounts = await asyncio.to_thread(
+                oauth_client.get_accounts,
                 interaction.user.id,
                 True,
             )
         except DiscordApiError as exc:
-            account = await asyncio.to_thread(
-                oauth_client.get_account,
+            accounts = await asyncio.to_thread(
+                oauth_client.get_accounts,
                 interaction.user.id,
                 False,
             )
@@ -156,7 +156,7 @@ def create_bot(
             view=PanelView(
                 oauth_client,
                 interaction.user.id,
-                account,
+                accounts,
                 can_join_here=bot_has_admin_in_interaction(interaction),
                 note=error,
             ),

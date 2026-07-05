@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+MAX_ACCOUNTS_PER_OWNER = 3
+
+
 @dataclass(frozen=True)
 class OAuthState:
     state: str
@@ -29,6 +32,7 @@ class OAuthAccount:
     ip_address: str | None
     created_at: int
     updated_at: int
+    account_id: int | None = None
     webhook_id: str | None = None
     webhook_token: str | None = None
     webhook_channel_id: str | None = None

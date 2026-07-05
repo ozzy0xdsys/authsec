@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import discord
 
-from .models import OAuthAccount
+from .models import MAX_ACCOUNTS_PER_OWNER, OAuthAccount
 from .oauth import DiscordApiError, DiscordOAuthClient
 
 
@@ -82,7 +82,9 @@ class SetupScopeView(discord.ui.LayoutView):
                     "## Set up OAuth\n"
                     "Choose the account access to request. The default options cover "
                     "the main panel buttons. `Identify` is always included so the app "
-                    "knows which Discord account authorized it."
+                    "knows which Discord account authorized it. You can store up to "
+                    f"{MAX_ACCOUNTS_PER_OWNER} accounts; re-authorizing the same "
+                    "account updates its saved access."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.ActionRow(ScopeSelect(self)),
@@ -265,55 +267,83 @@ class PanelView(discord.ui.LayoutView):
         self,
         oauth_client: DiscordOAuthClient,
         owner_id: int,
-        account: OAuthAccount | None,
+        accounts: list[OAuthAccount],
         can_join_here: bool,
         note: str | None = None,
+        page: int = 0,
     ):
         super().__init__(timeout=300)
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
-        self.account = account
-        has_account = account is not None
+        self.accounts = accounts
+        self.page = panel_page_index(accounts, page)
+        self.account = accounts[self.page] if accounts else None
+        self.account_id = self.account.account_id if self.account else None
+        self.can_join_here = can_join_here
+        has_account = self.account is not None
+
+        children: list[discord.ui.Item] = [
+            discord.ui.TextDisplay(
+                panel_text(
+                    self.account,
+                    note,
+                    page=self.page,
+                    account_count=len(self.accounts),
+                )
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.ActionRow(
+                RefreshButton(self, disabled=not has_account),
+                DetailsButton(self, disabled=not has_account),
+                GuildsButton(
+                    self,
+                    disabled=not has_account or not self.account.has_scope("guilds"),
+                ),
+                ConnectionsButton(
+                    self,
+                    disabled=not has_account
+                    or not self.account.has_scope("connections"),
+                ),
+            ),
+            discord.ui.ActionRow(
+                RelationshipsButton(
+                    self,
+                    disabled=not has_account
+                    or not self.account.has_scope("relationships.read"),
+                ),
+                WebhookMessageButton(
+                    self,
+                    disabled=(
+                        not has_account
+                        or not self.account.has_scope("webhook.incoming")
+                    ),
+                ),
+                JoinServerButton(
+                    self,
+                    disabled=(
+                        not has_account
+                        or not self.account.has_scope("guilds.join")
+                        or not can_join_here
+                    ),
+                ),
+                DisconnectButton(self, disabled=not has_account),
+            ),
+        ]
+
+        if len(self.accounts) > 1:
+            children.extend(
+                [
+                    discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                    discord.ui.ActionRow(
+                        PanelPageButton(self, -1),
+                        PanelPageButton(self, 1),
+                    ),
+                ]
+            )
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(panel_text(account, note)),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                discord.ui.ActionRow(
-                    RefreshButton(self, disabled=not has_account),
-                    DetailsButton(self, disabled=not has_account),
-                    GuildsButton(
-                        self,
-                        disabled=not has_account or not account.has_scope("guilds"),
-                    ),
-                    ConnectionsButton(
-                        self,
-                        disabled=not has_account or not account.has_scope("connections"),
-                    ),
-                ),
-                discord.ui.ActionRow(
-                    RelationshipsButton(
-                        self,
-                        disabled=not has_account
-                        or not account.has_scope("relationships.read"),
-                    ),
-                    WebhookMessageButton(
-                        self,
-                        disabled=(
-                            not has_account
-                            or not account.has_scope("webhook.incoming")
-                        ),
-                    ),
-                    JoinServerButton(
-                        self,
-                        disabled=(
-                            not has_account
-                            or not account.has_scope("guilds.join")
-                            or not can_join_here
-                        ),
-                    ),
-                    DisconnectButton(self, disabled=not has_account),
-                ),
+                *children,
                 accent_color=ACCENT_DEFAULT if has_account else ACCENT_MUTED,
             )
         )
@@ -329,6 +359,34 @@ class PanelView(discord.ui.LayoutView):
         return False
 
 
+class PanelPageButton(discord.ui.Button):
+    def __init__(self, panel: PanelView, direction: int):
+        self.panel = panel
+        self.direction = direction
+        label = "Previous" if direction < 0 else "Next"
+        disabled = (
+            panel.page <= 0
+            if direction < 0
+            else panel.page >= len(panel.accounts) - 1
+        )
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            view=PanelView(
+                self.panel.oauth_client,
+                self.panel.owner_id,
+                self.panel.accounts,
+                can_join_here=bot_has_admin_in_interaction(interaction),
+                page=self.panel.page + self.direction,
+            )
+        )
+
+
 class RefreshButton(discord.ui.Button):
     def __init__(self, panel: PanelView, disabled: bool):
         super().__init__(
@@ -340,28 +398,32 @@ class RefreshButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        account_id = self.panel.account_id
         try:
-            account = await asyncio.to_thread(
+            refreshed = await asyncio.to_thread(
                 self.panel.oauth_client.refresh_account,
                 self.panel.owner_id,
                 True,
+                account_id,
             )
+            account_id = refreshed.account_id
             note = "Token refreshed. Account metadata was updated from Discord."
         except DiscordApiError as exc:
-            account = await asyncio.to_thread(
-                self.panel.oauth_client.get_account,
-                self.panel.owner_id,
-                False,
-            )
             note = str(exc)
 
+        accounts = await asyncio.to_thread(
+            self.panel.oauth_client.get_accounts,
+            self.panel.owner_id,
+            False,
+        )
         await interaction.edit_original_response(
             view=PanelView(
                 self.panel.oauth_client,
                 self.panel.owner_id,
-                account,
+                accounts,
                 can_join_here=bot_has_admin_in_interaction(interaction),
                 note=note,
+                page=panel_page_for_account(accounts, account_id, self.panel.page),
             )
         )
 
@@ -381,6 +443,7 @@ class DetailsButton(discord.ui.Button):
             user = await asyncio.to_thread(
                 self.panel.oauth_client.fetch_current_user,
                 self.panel.owner_id,
+                self.panel.account_id,
             )
             view = build_user_view(user, self.panel.account)
         except DiscordApiError as exc:
@@ -404,6 +467,7 @@ class GuildsButton(discord.ui.Button):
             guilds = await asyncio.to_thread(
                 self.panel.oauth_client.fetch_guilds,
                 self.panel.owner_id,
+                self.panel.account_id,
             )
             member_details = await fetch_guild_page_member_details(
                 self.panel.oauth_client,
@@ -411,6 +475,7 @@ class GuildsButton(discord.ui.Button):
                 guilds,
                 0,
                 self.panel.account,
+                self.panel.account_id,
             )
             view = GuildsPageView(
                 guilds,
@@ -418,6 +483,7 @@ class GuildsButton(discord.ui.Button):
                 self.panel.oauth_client,
                 member_details=member_details,
                 can_show_join_dates=can_show_guild_join_dates(self.panel.account),
+                account_id=self.panel.account_id,
             )
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
@@ -440,6 +506,7 @@ class ConnectionsButton(discord.ui.Button):
             connections = await asyncio.to_thread(
                 self.panel.oauth_client.fetch_connections,
                 self.panel.owner_id,
+                self.panel.account_id,
             )
             view = build_list_view("Linked Connections", connections, "connection")
         except DiscordApiError as exc:
@@ -463,6 +530,7 @@ class RelationshipsButton(discord.ui.Button):
             relationships = await asyncio.to_thread(
                 self.panel.oauth_client.fetch_relationships,
                 self.panel.owner_id,
+                self.panel.account_id,
             )
             view = RelationshipsPageView(relationships, self.panel.owner_id)
         except DiscordApiError as exc:
@@ -492,15 +560,25 @@ class WebhookMessageButton(discord.ui.Button):
             return
 
         await interaction.response.send_modal(
-            WebhookMessageModal(self.panel.oauth_client, self.panel.owner_id)
+            WebhookMessageModal(
+                self.panel.oauth_client,
+                self.panel.owner_id,
+                self.panel.account_id,
+            )
         )
 
 
 class WebhookMessageModal(discord.ui.Modal, title="Webhook Message"):
-    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+    def __init__(
+        self,
+        oauth_client: DiscordOAuthClient,
+        owner_id: int,
+        account_id: int | None,
+    ):
         super().__init__()
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
+        self.account_id = account_id
         self.content_input = discord.ui.TextInput(
             label="Message",
             placeholder="Text to send through the OAuth webhook.",
@@ -523,6 +601,7 @@ class WebhookMessageModal(discord.ui.Modal, title="Webhook Message"):
                 self.owner_id,
                 str(self.content_input.value),
                 str(self.username_input.value or ""),
+                self.account_id,
             )
             view = TextContainerView("Webhook Sent", message, ACCENT_SUCCESS)
         except DiscordApiError as exc:
@@ -559,6 +638,7 @@ class JoinServerButton(discord.ui.Button):
             view=JoinServerConfirmView(
                 self.panel.oauth_client,
                 self.panel.owner_id,
+                self.panel.account_id,
                 interaction.guild.id,
                 interaction.guild.name,
             ),
@@ -571,12 +651,14 @@ class JoinServerConfirmView(discord.ui.LayoutView):
         self,
         oauth_client: DiscordOAuthClient,
         owner_id: int,
+        account_id: int | None,
         guild_id: int,
         guild_name: str,
     ):
         super().__init__(timeout=120)
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
+        self.account_id = account_id
         self.guild_id = int(guild_id)
         self.guild_name = guild_name
         self.add_item(
@@ -627,6 +709,7 @@ class ConfirmJoinServerButton(discord.ui.Button):
                 self.confirm_view.oauth_client.add_to_guild,
                 self.confirm_view.owner_id,
                 self.confirm_view.guild_id,
+                self.confirm_view.account_id,
             )
             view = TextContainerView("Join complete", message, ACCENT_SUCCESS)
         except DiscordApiError as exc:
@@ -663,18 +746,26 @@ class DisconnectButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        account_id = self.panel.account_id
         revoked = await asyncio.to_thread(
             self.panel.oauth_client.disconnect_account,
             self.panel.owner_id,
+            account_id,
+        )
+        accounts = await asyncio.to_thread(
+            self.panel.oauth_client.get_accounts,
+            self.panel.owner_id,
+            False,
         )
         note = "Disconnected and revoked with Discord." if revoked else "Disconnected locally."
         await interaction.edit_original_response(
             view=PanelView(
                 self.panel.oauth_client,
                 self.panel.owner_id,
-                None,
+                accounts,
                 can_join_here=bot_has_admin_in_interaction(interaction),
                 note=note,
+                page=panel_page_index(accounts, self.panel.page),
             )
         )
 
@@ -690,6 +781,7 @@ class GuildsPageView(discord.ui.LayoutView):
         page: int = 0,
         member_details: dict[str, dict[str, Any]] | None = None,
         can_show_join_dates: bool = False,
+        account_id: int | None = None,
     ):
         super().__init__(timeout=300)
         self.guilds = guilds
@@ -698,6 +790,7 @@ class GuildsPageView(discord.ui.LayoutView):
         self.page = max(0, min(page, self.max_page))
         self.member_details = member_details or {}
         self.can_show_join_dates = can_show_join_dates
+        self.account_id = account_id
 
         if not guilds:
             self.add_item(
@@ -784,6 +877,7 @@ class GuildPageButton(discord.ui.Button):
                 self.guilds_view.owner_id,
                 self.guilds_view.guilds,
                 next_page,
+                account_id=self.guilds_view.account_id,
             )
 
         await interaction.edit_original_response(
@@ -794,6 +888,7 @@ class GuildPageButton(discord.ui.Button):
                 page=next_page,
                 member_details=member_details,
                 can_show_join_dates=self.guilds_view.can_show_join_dates,
+                account_id=self.guilds_view.account_id,
             )
         )
 
@@ -962,11 +1057,34 @@ def format_scope_list(scopes: list[str]) -> str:
     return ", ".join(labels) if labels else "Identify"
 
 
-def panel_text(account: OAuthAccount | None, note: str | None = None) -> str:
+def panel_page_index(accounts: list[OAuthAccount], page: int) -> int:
+    if not accounts:
+        return 0
+    return max(0, min(page, len(accounts) - 1))
+
+
+def panel_page_for_account(
+    accounts: list[OAuthAccount],
+    account_id: int | None,
+    fallback: int = 0,
+) -> int:
+    for index, account in enumerate(accounts):
+        if account.account_id == account_id:
+            return index
+    return panel_page_index(accounts, fallback)
+
+
+def panel_text(
+    account: OAuthAccount | None,
+    note: str | None = None,
+    page: int = 0,
+    account_count: int = 0,
+) -> str:
     if account is None:
         lines = [
             "## AuthSec Panel",
-            "No OAuth account is linked yet. Run `/setup` to create an authorization link.",
+            "No OAuth account is linked yet. Run `/setup` to create an authorization link. "
+            f"You can store up to {MAX_ACCOUNTS_PER_OWNER} accounts.",
         ]
         if note:
             lines.extend(["", f"**Note:** {note}"])
@@ -977,6 +1095,8 @@ def panel_text(account: OAuthAccount | None, note: str | None = None) -> str:
         "Manage the OAuth account linked to your Discord user. Unavailable actions "
         "stay disabled until the matching access is authorized.",
         "",
+        f"**Stored account:** {page + 1} of {max(1, account_count)} "
+        f"({MAX_ACCOUNTS_PER_OWNER} max)",
         f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
         f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
         f"**IP Address:** `{account.ip_address or 'unknown'}`",
@@ -1182,6 +1302,7 @@ async def fetch_guild_page_member_details(
     guilds: list[dict[str, Any]],
     page: int,
     account: OAuthAccount | None = None,
+    account_id: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     if account is not None and not can_show_guild_join_dates(account):
         return {}
@@ -1200,6 +1321,7 @@ async def fetch_guild_page_member_details(
             oauth_client.fetch_guild_member_details,
             owner_id,
             guild_ids,
+            account_id,
         )
     except DiscordApiError:
         return {}
