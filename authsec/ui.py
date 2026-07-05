@@ -46,10 +46,20 @@ SCOPE_LABELS = {
     "connections": "Connections",
     "guilds.join": "Join Guilds",
     "relationships.read": "Relationships",
-    "openid": "OpenID",
     "applications.builds.read": "App Builds",
+    "applications.entitlements": "Entitlements",
     "applications.store.update": "Store Management",
     "gdm.join": "Group DM Join",
+    "messages.read": "Messages Read",
+    "role_connections.write": "Role Connections",
+    "rpc.activities.write": "RPC Activities Write",
+    "rpc.notifications.read": "RPC Notifications Read",
+    "rpc.screenshare.read": "RPC Screenshare Read",
+    "rpc.screenshare.write": "RPC Screenshare Write",
+    "rpc.video.read": "RPC Video Read",
+    "rpc.video.write": "RPC Video Write",
+    "rpc.voice.read": "RPC Voice Read",
+    "rpc.voice.write": "RPC Voice Write",
     "webhook.incoming": "Incoming Webhook",
 }
 
@@ -936,14 +946,14 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             default=True,
         ),
         discord.SelectOption(
-            label="OpenID",
-            value="openid",
-            description="Return basic OpenID identity data during authorization.",
-        ),
-        discord.SelectOption(
             label="App Builds",
             value="applications.builds.read",
             description="Read build data for the linked account applications.",
+        ),
+        discord.SelectOption(
+            label="Entitlements",
+            value="applications.entitlements",
+            description="Manage entitlements for linked account applications.",
         ),
         discord.SelectOption(
             label="Store Management",
@@ -954,6 +964,56 @@ def oauth_scope_options() -> list[discord.SelectOption]:
             label="Group DM Join",
             value="gdm.join",
             description="Allow adding the linked account to managed group DMs.",
+        ),
+        discord.SelectOption(
+            label="Messages Read",
+            value="messages.read",
+            description="Read messages available to this app authorization.",
+        ),
+        discord.SelectOption(
+            label="Role Connections",
+            value="role_connections.write",
+            description="Update this app role connection metadata.",
+        ),
+        discord.SelectOption(
+            label="RPC Activities Write",
+            value="rpc.activities.write",
+            description="Update user activity through Discord RPC.",
+        ),
+        discord.SelectOption(
+            label="RPC Notifications Read",
+            value="rpc.notifications.read",
+            description="Receive user notifications through Discord RPC.",
+        ),
+        discord.SelectOption(
+            label="RPC Screenshare Read",
+            value="rpc.screenshare.read",
+            description="Read screenshare status through Discord RPC.",
+        ),
+        discord.SelectOption(
+            label="RPC Screenshare Write",
+            value="rpc.screenshare.write",
+            description="Update screenshare settings through Discord RPC.",
+        ),
+        discord.SelectOption(
+            label="RPC Video Read",
+            value="rpc.video.read",
+            description="Read video status through Discord RPC.",
+        ),
+        discord.SelectOption(
+            label="RPC Video Write",
+            value="rpc.video.write",
+            description="Update video settings through Discord RPC.",
+        ),
+        discord.SelectOption(
+            label="RPC Voice Read",
+            value="rpc.voice.read",
+            description="Read voice settings through Discord RPC.",
+        ),
+        discord.SelectOption(
+            label="RPC Voice Write",
+            value="rpc.voice.write",
+            description="Update voice settings through Discord RPC.",
         ),
         discord.SelectOption(
             label="Incoming Webhook",
