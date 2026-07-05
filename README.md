@@ -9,7 +9,7 @@ AuthSec is a Discord bot plus a tiny Flask callback website for Discord OAuth.
 - `/create` posts a reusable button message for an OAuth link.
 - `/panel` shows the linked account and provides working actions:
   - refresh tokens
-  - view current user details
+  - view current user details and look up saved callback IP geolocation
   - show the callback IP address stored when OAuth completes
   - show whether MFA is enabled when Discord includes `mfa_enabled` in the OAuth user payload
   - list guilds two per page with server icons, ownership, IDs, decoded permissions, vanity invite data, join dates, counts, and pagination
@@ -59,6 +59,7 @@ export DISCORD_CLIENT_SECRET="CLIENT_SECRET"
 export AUTHSEC_WEB_PORT="80"
 export AUTHSEC_REDIRECT_URI="https://authsec.xyz/callback"
 export AUTHSEC_CLEAR_WEB_PORT="true"
+export AUTHSEC_IPGEO_API_KEY="ipgeo_YOUR_KEY"
 ```
 
 ## Database

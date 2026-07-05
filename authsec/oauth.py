@@ -4,7 +4,7 @@ import secrets
 import time
 from dataclasses import replace
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -317,6 +317,23 @@ class DiscordOAuthClient:
             return payload["relationships"]
         raise DiscordApiError("Discord returned an unexpected relationship list.", 502)
 
+    def fetch_ip_info(self, ip_address: str | None) -> dict[str, Any]:
+        api_key = self.settings.ipgeo.api_key
+        if not api_key:
+            raise DiscordApiError(
+                "IPGeo is not configured. Set AUTHSEC_IPGEO_API_KEY and restart the bot.",
+                400,
+            )
+
+        ip_address = str(ip_address or "").strip()
+        if not ip_address or ip_address.lower() == "unknown":
+            raise DiscordApiError("No IP address is stored for this account.", 400)
+
+        return self._request_ipgeo_json(
+            f"/v1/ip/{quote(ip_address, safe='')}",
+            headers={"X-API-Key": api_key},
+        )
+
     def add_to_guild(
         self,
         owner_id: int,
@@ -457,6 +474,41 @@ class DiscordOAuthClient:
             except DiscordApiError:
                 continue
 
+    def _request_ipgeo_json(
+        self,
+        path: str,
+        expected_statuses: tuple[int, ...] = (200,),
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        url = (
+            path
+            if path.startswith("http")
+            else f"{self.settings.ipgeo.base_url}{path}"
+        )
+        try:
+            response = self.session.get(
+                url,
+                timeout=self.settings.oauth.request_timeout,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise DiscordApiError(f"IPGeo request failed: {exc}") from exc
+
+        if response.status_code not in expected_statuses:
+            raise DiscordApiError(
+                _api_error_message(response, "IPGeo"),
+                400 if response.status_code < 500 else 502,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise DiscordApiError("IPGeo returned invalid JSON.", 502) from exc
+
+        if not isinstance(payload, dict):
+            raise DiscordApiError("IPGeo returned an unexpected response.", 502)
+        return payload
+
     def _request_json(
         self,
         method: str,
@@ -561,16 +613,20 @@ def _require_scope(account: OAuthAccount, scope: str) -> None:
 
 
 def _discord_error_message(response: requests.Response) -> str:
+    return _api_error_message(response, "Discord")
+
+
+def _api_error_message(response: requests.Response, service: str) -> str:
     try:
         payload = response.json()
     except ValueError:
-        return response.text[:300] or f"Discord returned HTTP {response.status_code}."
+        return response.text[:300] or f"{service} returned HTTP {response.status_code}."
 
     if isinstance(payload, dict):
         return str(
             payload.get("error_description")
             or payload.get("message")
             or payload.get("error")
-            or f"Discord returned HTTP {response.status_code}."
+            or f"{service} returned HTTP {response.status_code}."
         )
-    return f"Discord returned HTTP {response.status_code}."
+    return f"{service} returned HTTP {response.status_code}."

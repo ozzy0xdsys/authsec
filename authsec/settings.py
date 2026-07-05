@@ -44,11 +44,18 @@ class OAuthSettings:
 
 
 @dataclass(frozen=True)
+class IPGeoSettings:
+    api_key: str | None = None
+    base_url: str = "https://api.getipgeo.com"
+
+
+@dataclass(frozen=True)
 class Settings:
     discord: DiscordSettings
     web: WebSettings
     database: DatabaseSettings
     oauth: OAuthSettings
+    ipgeo: IPGeoSettings
 
 
 def load_settings(path: Path = CONFIG_PATH) -> Settings:
@@ -58,6 +65,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     web = _dict(raw.get("web"))
     database = _dict(raw.get("database"))
     oauth = _dict(raw.get("oauth"))
+    ipgeo = _dict(raw.get("ipgeo"))
 
     token = _first_value(
         discord,
@@ -128,6 +136,18 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         ("clear_port_before_start", "stop_port_processes"),
         ("AUTHSEC_CLEAR_WEB_PORT", "AUTHSEC_STOP_PORT_PROCESSES"),
     )
+    ipgeo_api_key = _first_value(
+        ipgeo,
+        raw,
+        ("api_key", "key"),
+        ("AUTHSEC_IPGEO_API_KEY", "IPGEO_API_KEY"),
+    )
+    ipgeo_base_url = _first_value(
+        ipgeo,
+        raw,
+        ("base_url",),
+        ("AUTHSEC_IPGEO_BASE_URL",),
+    )
 
     return Settings(
         discord=DiscordSettings(
@@ -151,6 +171,10 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
                 oauth.get("refresh_before_expiry_seconds", 14 * 24 * 60 * 60)
             ),
             state_ttl_seconds=int(oauth.get("state_ttl_seconds", 10 * 60)),
+        ),
+        ipgeo=IPGeoSettings(
+            api_key=str(ipgeo_api_key).strip() if ipgeo_api_key else None,
+            base_url=str(ipgeo_base_url or "https://api.getipgeo.com").rstrip("/"),
         ),
     )
 

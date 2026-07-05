@@ -20,5 +20,9 @@
     "request_timeout": 10,
     "refresh_before_expiry_seconds": 1209600,
     "state_ttl_seconds": 600
+  },
+  "ipgeo": {
+    "api_key": null,
+    "base_url": "https://api.getipgeo.com"
   }
 }

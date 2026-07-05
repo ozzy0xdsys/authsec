@@ -466,7 +466,49 @@ class DetailsButton(discord.ui.Button):
                 self.panel.owner_id,
                 self.panel.account_id,
             )
-            view = build_user_view(user, self.panel.account)
+            view = build_user_view(
+                user,
+                self.panel.account,
+                self.panel.oauth_client,
+                self.panel.owner_id,
+            )
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
+class IPInfoButton(discord.ui.Button):
+    def __init__(
+        self,
+        oauth_client: DiscordOAuthClient,
+        owner_id: int | None,
+        ip_address: str | None,
+    ):
+        super().__init__(
+            label="IP Info",
+            style=discord.ButtonStyle.secondary,
+            disabled=not bool(str(ip_address or "").strip()),
+        )
+        self.oauth_client = oauth_client
+        self.owner_id = owner_id
+        self.ip_address = ip_address
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.owner_id is not None and interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                view=build_error_view("This account detail view belongs to someone else."),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            payload = await asyncio.to_thread(
+                self.oauth_client.fetch_ip_info,
+                self.ip_address,
+            )
+            view = build_ip_info_view(payload)
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
 
@@ -1223,6 +1265,8 @@ def panel_text(
 def build_user_view(
     user: dict[str, Any],
     account: OAuthAccount | None = None,
+    oauth_client: DiscordOAuthClient | None = None,
+    owner_id: int | None = None,
 ) -> discord.ui.LayoutView:
     lines = [
         f"**ID:** `{user.get('id', 'unknown')}`",
@@ -1239,11 +1283,77 @@ def build_user_view(
     if "mfa_enabled" in user:
         lines.append(f"**MFA enabled:** {format_optional_bool(user.get('mfa_enabled'))}")
 
-    return TextContainerView(
-        "Linked Account Details",
-        "\n".join(lines),
-        ACCENT_DEFAULT,
+    body = "\n".join(lines)
+    children: list[discord.ui.Item] = [
+        discord.ui.TextDisplay(f"## Linked Account Details\n{body}")
+    ]
+    if account is not None and oauth_client is not None:
+        children.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    IPInfoButton(oauth_client, owner_id, account.ip_address)
+                ),
+            ]
+        )
+
+    view = discord.ui.LayoutView(timeout=300)
+    view.add_item(
+        discord.ui.Container(
+            *children,
+            accent_color=ACCENT_DEFAULT,
+        )
     )
+    return view
+
+
+def build_ip_info_view(payload: dict[str, Any]) -> discord.ui.LayoutView:
+    country = payload.get("country") if isinstance(payload.get("country"), dict) else {}
+    continent = (
+        payload.get("continent") if isinstance(payload.get("continent"), dict) else {}
+    )
+    network = payload.get("network") if isinstance(payload.get("network"), dict) else {}
+    risk_flags = (
+        payload.get("risk_flags") if isinstance(payload.get("risk_flags"), dict) else {}
+    )
+
+    location_parts = [
+        safe_optional_text(payload.get("city")),
+        format_subdivisions(payload.get("subdivisions")),
+        format_named_code(country),
+    ]
+    location = ", ".join(part for part in location_parts if part) or "Unknown"
+
+    lines = [
+        f"**IP Address:** `{safe_optional_text(payload.get('ip')) or 'unknown'}`",
+        f"**Location:** {location}",
+    ]
+
+    continent_text = format_named_code(continent)
+    if continent_text:
+        lines.append(f"**Continent:** {continent_text}")
+
+    coordinates = format_coordinates(payload)
+    if coordinates:
+        lines.append(f"**Coordinates:** {coordinates}")
+
+    accuracy_radius = payload.get("accuracy_radius_km")
+    if accuracy_radius is not None:
+        lines.append(f"**Accuracy radius:** `{accuracy_radius} km`")
+
+    timezone = safe_optional_text(payload.get("timezone"))
+    if timezone:
+        lines.append(f"**Timezone:** `{timezone}`")
+
+    network_text = format_network(network)
+    if network_text:
+        lines.append(f"**Network:** {network_text}")
+
+    risk_text = format_risk_flags(risk_flags)
+    if risk_text:
+        lines.append(f"**Risk flags:** {risk_text}")
+
+    return TextContainerView("IP Info", "\n".join(lines), ACCENT_DEFAULT)
 
 
 def build_list_view(
@@ -1576,6 +1686,57 @@ def format_user_agent(value: str | None) -> str:
     if not value:
         return "unknown"
     return discord.utils.escape_markdown(safe_discord_text(truncate_label(value, 300)))
+
+
+def safe_optional_text(value: Any, max_length: int = 120) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return discord.utils.escape_markdown(safe_discord_text(truncate_label(text, max_length)))
+
+
+def format_named_code(value: dict[str, Any]) -> str | None:
+    name = safe_optional_text(value.get("name"))
+    code = safe_optional_text(value.get("code"), 16)
+    if name and code:
+        return f"{name} (`{code}`)"
+    return name or (f"`{code}`" if code else None)
+
+
+def format_subdivisions(value: Any) -> str | None:
+    if isinstance(value, list):
+        parts = [safe_optional_text(item) for item in value]
+        return ", ".join(part for part in parts if part) or None
+    return safe_optional_text(value)
+
+
+def format_coordinates(payload: dict[str, Any]) -> str | None:
+    latitude = payload.get("latitude")
+    longitude = payload.get("longitude")
+    if latitude is None or longitude is None:
+        return None
+    return f"`{latitude}, {longitude}`"
+
+
+def format_network(value: dict[str, Any]) -> str | None:
+    isp = safe_optional_text(value.get("isp"))
+    asn = value.get("asn")
+    if isp and asn:
+        return f"{isp} (`ASN {asn}`)"
+    if asn:
+        return f"`ASN {asn}`"
+    return isp
+
+
+def format_risk_flags(value: dict[str, Any]) -> str | None:
+    labels = []
+    if "tor_exit" in value:
+        labels.append(f"Tor exit: {format_optional_bool(value.get('tor_exit'))}")
+    if "hosting" in value:
+        labels.append(f"Hosting: {format_optional_bool(value.get('hosting'))}")
+    return ", ".join(labels) if labels else None
 
 
 def safe_discord_text(value: Any) -> str:
