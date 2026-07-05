@@ -1308,52 +1308,55 @@ def build_user_view(
 
 
 def build_ip_info_view(payload: dict[str, Any]) -> discord.ui.LayoutView:
-    country = payload.get("country") if isinstance(payload.get("country"), dict) else {}
-    continent = (
-        payload.get("continent") if isinstance(payload.get("continent"), dict) else {}
-    )
+    country = payload.get("country")
+    continent = payload.get("continent")
     network = payload.get("network") if isinstance(payload.get("network"), dict) else {}
     risk_flags = (
         payload.get("risk_flags") if isinstance(payload.get("risk_flags"), dict) else {}
     )
 
-    location_parts = [
-        safe_optional_text(payload.get("city")),
-        format_subdivisions(payload.get("subdivisions")),
-        format_named_code(country),
-    ]
-    location = ", ".join(part for part in location_parts if part) or "Unknown"
-
-    lines = [
+    header_lines = [
         f"**IP Address:** `{safe_optional_text(payload.get('ip')) or 'unknown'}`",
-        f"**Location:** {location}",
     ]
 
-    continent_text = format_named_code(continent)
-    if continent_text:
-        lines.append(f"**Continent:** {continent_text}")
+    location_lines = [
+        f"**City:** {format_unknown(payload.get('city'))}",
+        f"**Country:** {format_named_code(country) or 'Unknown'}",
+        f"**Continent:** {format_named_code(continent) or 'Unknown'}",
+        f"**Subdivisions:** {format_subdivisions(payload.get('subdivisions')) or 'Unknown'}",
+    ]
 
-    coordinates = format_coordinates(payload)
-    if coordinates:
-        lines.append(f"**Coordinates:** {coordinates}")
-
+    coordinates = format_coordinates(payload) or "Unknown"
+    location_lines.append(f"**Coordinates:** {coordinates}")
+    timezone = format_unknown(payload.get("timezone"))
+    location_lines.append(f"**Timezone:** {timezone}")
     accuracy_radius = payload.get("accuracy_radius_km")
     if accuracy_radius is not None:
-        lines.append(f"**Accuracy radius:** `{accuracy_radius} km`")
+        location_lines.append(f"**Accuracy radius:** `{accuracy_radius} km`")
 
-    timezone = safe_optional_text(payload.get("timezone"))
-    if timezone:
-        lines.append(f"**Timezone:** `{timezone}`")
+    network_lines = [
+        f"**Networks:** {format_network_name(network) or 'Unknown'}",
+        f"**ASN:** {format_asn(network.get('asn'))}",
+        f"**Hosting:** {format_optional_bool(risk_flags.get('hosting'))}",
+        f"**Tor exit:** {format_optional_bool(risk_flags.get('tor_exit'))}",
+    ]
 
-    network_text = format_network(network)
-    if network_text:
-        lines.append(f"**Network:** {network_text}")
+    header_body = "\n".join(header_lines)
+    location_body = "\n".join(location_lines)
+    network_body = "\n".join(network_lines)
 
-    risk_text = format_risk_flags(risk_flags)
-    if risk_text:
-        lines.append(f"**Risk flags:** {risk_text}")
-
-    return TextContainerView("IP Info", "\n".join(lines), ACCENT_DEFAULT)
+    view = discord.ui.LayoutView(timeout=300)
+    view.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay(f"## IP Info\n{header_body}"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(f"### Location\n{location_body}"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(f"### Network\n{network_body}"),
+            accent_color=ACCENT_DEFAULT,
+        )
+    )
+    return view
 
 
 def build_list_view(
@@ -1697,7 +1700,14 @@ def safe_optional_text(value: Any, max_length: int = 120) -> str | None:
     return discord.utils.escape_markdown(safe_discord_text(truncate_label(text, max_length)))
 
 
-def format_named_code(value: dict[str, Any]) -> str | None:
+def format_unknown(value: Any, max_length: int = 120) -> str:
+    return safe_optional_text(value, max_length) or "Unknown"
+
+
+def format_named_code(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return safe_optional_text(value)
+
     name = safe_optional_text(value.get("name"))
     code = safe_optional_text(value.get("code"), 16)
     if name and code:
@@ -1707,7 +1717,10 @@ def format_named_code(value: dict[str, Any]) -> str | None:
 
 def format_subdivisions(value: Any) -> str | None:
     if isinstance(value, list):
-        parts = [safe_optional_text(item) for item in value]
+        parts = [
+            format_named_code(item) if isinstance(item, dict) else safe_optional_text(item)
+            for item in value
+        ]
         return ", ".join(part for part in parts if part) or None
     return safe_optional_text(value)
 
@@ -1728,6 +1741,21 @@ def format_network(value: dict[str, Any]) -> str | None:
     if asn:
         return f"`ASN {asn}`"
     return isp
+
+
+def format_network_name(value: dict[str, Any]) -> str | None:
+    return (
+        safe_optional_text(value.get("isp"))
+        or safe_optional_text(value.get("name"))
+        or safe_optional_text(value.get("organization"))
+        or safe_optional_text(value.get("org"))
+    )
+
+
+def format_asn(value: Any) -> str:
+    if value is None:
+        return "Unknown"
+    return f"`ASN {safe_optional_text(value, 32) or 'Unknown'}`"
 
 
 def format_risk_flags(value: dict[str, Any]) -> str | None:
