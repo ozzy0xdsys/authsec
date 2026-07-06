@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import csv
-import io
 import json
+import os
+import tempfile
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -870,31 +871,29 @@ class ExportFormatSelect(discord.ui.Select):
                     value="txt",
                     description="Readable plain text export.",
                 ),
-                discord.SelectOption(
-                    label="CSV",
-                    value="csv",
-                    description="Flat rows for spreadsheets.",
-                ),
             ],
         )
 
     async def callback(self, interaction: discord.Interaction):
         export_format = self.values[0]
         await interaction.response.defer(ephemeral=True, thinking=True)
+        export_path: Path | None = None
+        discord_file: discord.File | None = None
         try:
-            export_file = await asyncio.to_thread(
+            export_path, export_filename = await asyncio.to_thread(
                 build_export_file,
                 self.parent_view.oauth_client,
                 self.parent_view.owner_id,
                 export_format,
             )
+            discord_file = discord.File(str(export_path), filename=export_filename)
             await interaction.followup.send(
                 view=TextContainerView(
                     "Export Ready",
                     "The file contains saved account data and available scoped data.",
                     ACCENT_SUCCESS,
                 ),
-                file=export_file,
+                file=discord_file,
                 ephemeral=True,
             )
         except DiscordApiError as exc:
@@ -902,6 +901,11 @@ class ExportFormatSelect(discord.ui.Select):
                 view=build_error_view(str(exc)),
                 ephemeral=True,
             )
+        finally:
+            if discord_file is not None:
+                discord_file.close()
+            if export_path is not None:
+                await asyncio.to_thread(delete_export_file, export_path)
 
 
 class DisconnectButton(discord.ui.Button):
@@ -1166,7 +1170,7 @@ def build_export_file(
     oauth_client: DiscordOAuthClient,
     owner_id: int,
     export_format: str,
-) -> discord.File:
+) -> tuple[Path, str]:
     export_format = export_format.lower().strip()
     data = build_export_data(oauth_client, owner_id)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -1176,12 +1180,24 @@ def build_export_file(
         content = json.dumps(data, indent=2, ensure_ascii=False)
     elif export_format == "txt":
         content = export_data_to_text(data)
-    elif export_format == "csv":
-        content = export_data_to_csv(data)
     else:
         raise DiscordApiError("Unsupported export format.", 400)
 
-    return discord.File(io.BytesIO(content.encode("utf-8")), filename=filename)
+    file_descriptor, raw_path = tempfile.mkstemp(
+        prefix=f"authsec-export-{owner_id}-",
+        suffix=f".{export_format}",
+    )
+    with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="") as file:
+        file.write(content)
+
+    return Path(raw_path), filename
+
+
+def delete_export_file(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def build_export_data(
@@ -1367,168 +1383,6 @@ def text_export_lines(label: str, value: Any, indent: int = 0) -> list[str]:
 
     lines[-1] += f" {value if value is not None else 'None'}"
     return lines
-
-
-def export_data_to_csv(data: dict[str, Any]) -> str:
-    output = io.StringIO(newline="")
-    writer = csv.DictWriter(
-        output,
-        fieldnames=[
-            "account_id",
-            "discord_user_id",
-            "ip_address",
-            "user_agent",
-            "section",
-            "item_id",
-            "name",
-            "data_json",
-        ],
-    )
-    writer.writeheader()
-
-    for account_entry in data.get("accounts", []):
-        stored = account_entry.get("stored_account", {})
-        account_id = stored.get("account_id")
-        discord_user_id = stored.get("discord_user_id")
-        ip_address = account_entry.get("ip_address") or stored.get("ip_address")
-        user_agent = account_entry.get("user_agent") or stored.get("user_agent")
-        write_export_csv_row(
-            writer,
-            account_id,
-            discord_user_id,
-            ip_address,
-            user_agent,
-            "account",
-            stored,
-        )
-        write_export_csv_row(
-            writer,
-            account_id,
-            discord_user_id,
-            ip_address,
-            user_agent,
-            "webhook",
-            account_entry.get("webhook", {}),
-        )
-        write_export_csv_row(
-            writer,
-            account_id,
-            discord_user_id,
-            ip_address,
-            user_agent,
-            "current_user",
-            account_entry.get("current_user"),
-        )
-        write_export_csv_row(
-            writer,
-            account_id,
-            discord_user_id,
-            ip_address,
-            user_agent,
-            "ip_info",
-            account_entry.get("ip_info"),
-        )
-        for server in account_entry.get("servers", []):
-            write_export_csv_row(
-                writer,
-                account_id,
-                discord_user_id,
-                ip_address,
-                user_agent,
-                "server",
-                server,
-            )
-        for guild_id, detail in account_entry.get("server_member_details", {}).items():
-            write_export_csv_row(
-                writer,
-                account_id,
-                discord_user_id,
-                ip_address,
-                user_agent,
-                "server_member_detail",
-                {"guild_id": guild_id, "member": detail},
-            )
-        for connection in account_entry.get("connections", []):
-            write_export_csv_row(
-                writer,
-                account_id,
-                discord_user_id,
-                ip_address,
-                user_agent,
-                "connection",
-                connection,
-            )
-        for relationship in account_entry.get("relationships", []):
-            write_export_csv_row(
-                writer,
-                account_id,
-                discord_user_id,
-                ip_address,
-                user_agent,
-                "relationship",
-                relationship,
-            )
-        for error in account_entry.get("errors", []):
-            write_export_csv_row(
-                writer,
-                account_id,
-                discord_user_id,
-                ip_address,
-                user_agent,
-                "error",
-                error,
-            )
-
-    return output.getvalue()
-
-
-def write_export_csv_row(
-    writer: csv.DictWriter,
-    account_id: Any,
-    discord_user_id: Any,
-    ip_address: Any,
-    user_agent: Any,
-    section: str,
-    data: Any,
-) -> None:
-    if data in (None, [], {}):
-        return
-    writer.writerow(
-        {
-            "account_id": account_id,
-            "discord_user_id": discord_user_id,
-            "ip_address": ip_address,
-            "user_agent": user_agent,
-            "section": section,
-            "item_id": export_item_id(data),
-            "name": export_item_name(data),
-            "data_json": json.dumps(data, ensure_ascii=False, sort_keys=True),
-        }
-    )
-
-
-def export_item_id(data: Any) -> str:
-    if isinstance(data, dict):
-        user = data.get("user") if isinstance(data.get("user"), dict) else {}
-        value = data.get("id") or data.get("guild_id") or user.get("id")
-        if value is not None:
-            return str(value)
-    return ""
-
-
-def export_item_name(data: Any) -> str:
-    if isinstance(data, dict):
-        user = data.get("user") if isinstance(data.get("user"), dict) else {}
-        value = (
-            data.get("name")
-            or data.get("username")
-            or data.get("global_name")
-            or user.get("global_name")
-            or user.get("username")
-        )
-        if value is not None:
-            return str(value)
-    return ""
 
 
 def _export_epoch(value: int | None) -> str | None:
