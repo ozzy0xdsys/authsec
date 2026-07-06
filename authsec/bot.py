@@ -23,6 +23,14 @@ from .ui import (
 logger = logging.getLogger(__name__)
 
 
+ALL_COMMAND_CONTEXTS = app_commands.AppCommandContext(
+    guild=True,
+    dm_channel=True,
+    private_channel=True,
+)
+ALL_INSTALL_TYPES = app_commands.AppInstallationType(guild=True, user=True)
+
+
 def command_contexts(func):
     func = app_commands.allowed_installs(guilds=True, users=True)(func)
     return app_commands.allowed_contexts(
@@ -94,7 +102,11 @@ def create_bot(
 ) -> discord.Client:
     intents = discord.Intents.default()
     bot = discord.Client(intents=intents)
-    tree = app_commands.CommandTree(bot)
+    tree = app_commands.CommandTree(
+        bot,
+        allowed_contexts=ALL_COMMAND_CONTEXTS,
+        allowed_installs=ALL_INSTALL_TYPES,
+    )
     commands_synced = False
 
     @bot.event
