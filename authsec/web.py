@@ -99,9 +99,14 @@ def create_web_app(oauth_client: DiscordOAuthClient, bot_runtime: BotRuntime) ->
         if not selected_scopes:
             selected_scopes = list(DEFAULT_WEB_SETUP_SCOPES)
 
-        return redirect(
-            oauth_client.build_authorization_url(_owner_id(user), selected_scopes)
+        authorization_url = oauth_client.build_authorization_url(
+            _owner_id(user),
+            selected_scopes,
         )
+        if _wants_authorize_json():
+            return jsonify({"url": authorization_url})
+
+        return redirect(authorization_url)
 
     @app.get("/health")
     def health():
@@ -397,6 +402,14 @@ def _user_agent() -> str | None:
 def _is_local_request() -> bool:
     host = request.host.split(":", 1)[0].lower()
     return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _wants_authorize_json() -> bool:
+    accept = request.headers.get("Accept", "")
+    return (
+        request.headers.get("X-AuthSec-Copy-Link") == "1"
+        or "application/json" in accept
+    )
 
 
 def _session_user() -> dict[str, Any] | None:
@@ -892,11 +905,11 @@ def _authorize_account_panel() -> str:
         for scope, label in WEB_SCOPE_LABELS.items()
     )
     return f"""
-    <form class="switcher setup-panel" method="post" action="{url_for("authorize_account")}">
+    <form class="switcher setup-panel" method="post" action="{url_for("authorize_account")}" data-copy-link-form>
       {_csrf_input()}
       <p class="eyebrow">Authorize</p>
       <div class="scope-list">{options}</div>
-      <button class="button primary" type="submit">Create Link</button>
+      <button class="button primary" type="submit" data-copy-link-button>Create Link</button>
     </form>
     """
 
@@ -1091,10 +1104,10 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
         <title>{_h(title)}</title>
         <style>
           :root {{
-            color-scheme: dark;
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: #0f1117;
-            color: #f4f7fb;
+            color-scheme: light;
+            font-family: Georgia, "Times New Roman", ui-serif, serif;
+            background: #eee5d4;
+            color: #2d251b;
           }}
           * {{
             box-sizing: border-box;
@@ -1102,7 +1115,10 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           body {{
             min-height: 100vh;
             margin: 0;
-            background: #0f1117;
+            background:
+              linear-gradient(180deg, rgba(255, 251, 242, 0.94), rgba(229, 218, 198, 0.96)),
+              repeating-linear-gradient(90deg, rgba(111, 73, 43, 0.05) 0 1px, transparent 1px 44px);
+            color: #2d251b;
           }}
           @keyframes panelIn {{
             from {{
@@ -1117,10 +1133,10 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           @keyframes markPulse {{
             0%,
             100% {{
-              box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.26);
+              box-shadow: 0 0 0 0 rgba(119, 31, 45, 0.24);
             }}
             50% {{
-              box-shadow: 0 0 0 7px rgba(59, 130, 246, 0);
+              box-shadow: 0 0 0 7px rgba(119, 31, 45, 0);
             }}
           }}
           @keyframes noticeIn {{
@@ -1150,11 +1166,11 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           }}
           .login-panel {{
             width: min(460px, 100%);
-            border: 1px solid #293040;
+            border: 1px solid #b8a783;
             border-radius: 8px;
-            background: #171b24;
+            background: #fffaf0;
             padding: 32px;
-            box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
+            box-shadow: 0 22px 60px rgba(71, 52, 30, 0.18);
             animation: panelIn 420ms ease-out both;
           }}
           .brand-line,
@@ -1163,7 +1179,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             align-items: center;
             gap: 10px;
             text-decoration: none;
-            color: #f8fbff;
+            color: #2d251b;
             font-weight: 750;
           }}
           .brand-mark {{
@@ -1172,8 +1188,9 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             display: grid;
             place-items: center;
             border-radius: 8px;
-            background: #3b82f6;
-            color: #ffffff;
+            background: #7a1f2f;
+            color: #fffaf0;
+            border: 1px solid #c39a4c;
             font-weight: 850;
             animation: markPulse 3s ease-in-out infinite;
           }}
@@ -1182,6 +1199,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             font-size: clamp(28px, 5vw, 44px);
             line-height: 1.04;
             letter-spacing: 0;
+            color: #2d251b;
           }}
           h2 {{
             margin: 0 0 12px;
@@ -1190,7 +1208,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           }}
           p {{
             margin: 0;
-            color: #aeb7c8;
+            color: #6e604f;
             line-height: 1.55;
           }}
           .app-shell {{
@@ -1204,14 +1222,14 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             align-items: center;
             justify-content: space-between;
             gap: 16px;
-            border-bottom: 1px solid #242a37;
+            border-bottom: 1px solid #c9b894;
           }}
           .signed-in {{
             display: flex;
             align-items: center;
             justify-content: flex-end;
             gap: 10px;
-            color: #d7deeb;
+            color: #463b2e;
             min-width: 0;
           }}
           .signed-in span {{
@@ -1226,8 +1244,8 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             height: 44px;
             border-radius: 8px;
             object-fit: cover;
-            background: #222838;
-            border: 1px solid #30384a;
+            background: #eee3d0;
+            border: 1px solid #b8a783;
           }}
           .avatar.small {{
             width: 30px;
@@ -1257,9 +1275,10 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           .workspace-panel,
           .form-panel,
           .list-item {{
-            border: 1px solid #293040;
+            border: 1px solid #b8a783;
             border-radius: 8px;
-            background: #171b24;
+            background: #fffaf0;
+            box-shadow: 0 14px 32px rgba(71, 52, 30, 0.10);
             transition:
               border-color 180ms ease,
               box-shadow 180ms ease,
@@ -1277,12 +1296,12 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             line-height: 1;
           }}
           .stat-panel span {{
-            color: #8f9aac;
+            color: #776954;
             margin-left: 6px;
           }}
           .eyebrow {{
             margin: 0;
-            color: #72e0b9;
+            color: #7a1f2f;
             font-size: 12px;
             font-weight: 760;
             text-transform: uppercase;
@@ -1297,22 +1316,22 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             display: grid;
             gap: 3px;
             padding: 10px;
-            border: 1px solid #293040;
+            border: 1px solid #c5b38e;
             border-radius: 8px;
             text-decoration: none;
-            background: #111722;
+            background: #fbf4e8;
             transition:
               border-color 180ms ease,
               background-color 180ms ease,
               transform 180ms ease;
           }}
           .account-tab:hover {{
-            border-color: #4d7fd9;
+            border-color: #8b6f3d;
             transform: translateY(-1px);
           }}
           .account-tab.active {{
-            border-color: #3b82f6;
-            background: #16233a;
+            border-color: #7a1f2f;
+            background: #f4e8d7;
           }}
           .account-tab span,
           .account-tab small {{
@@ -1324,15 +1343,15 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           .account-tab small,
           .empty-line,
           .small-note {{
-            color: #8f9aac;
+            color: #776954;
           }}
           .account-select {{
             width: 100%;
             margin-top: 12px;
-            border: 1px solid #30384a;
+            border: 1px solid #b8a783;
             border-radius: 8px;
-            background: #101722;
-            color: #f4f7fb;
+            background: #fffaf0;
+            color: #2d251b;
             padding: 10px 12px;
           }}
           .setup-panel {{
@@ -1348,7 +1367,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             grid-template-columns: 18px minmax(0, 1fr);
             align-items: center;
             gap: 8px;
-            color: #d9e0ec;
+            color: #463b2e;
             font-size: 13px;
             font-weight: 650;
           }}
@@ -1356,7 +1375,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             width: 16px;
             height: 16px;
             padding: 0;
-            accent-color: #3b82f6;
+            accent-color: #7a1f2f;
           }}
           .workspace {{
             display: grid;
@@ -1378,14 +1397,14 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             font-size: clamp(26px, 3vw, 38px);
           }}
           .subtle {{
-            color: #8f9aac;
+            color: #776954;
           }}
           .status-pill {{
             flex: 0 0 auto;
-            border: 1px solid #304157;
+            border: 1px solid #c5b38e;
             border-radius: 999px;
-            color: #cfe1ff;
-            background: #111c2a;
+            color: #3c2e1f;
+            background: #f5ead9;
             padding: 8px 12px;
             font-size: 13px;
             font-weight: 720;
@@ -1397,9 +1416,9 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           }}
           .field {{
             min-width: 0;
-            border: 1px solid #242c3b;
+            border: 1px solid #c9b894;
             border-radius: 8px;
-            background: #111722;
+            background: #fbf4e8;
             padding: 12px;
             transition:
               border-color 180ms ease,
@@ -1407,14 +1426,14 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
               background-color 180ms ease;
           }}
           .field:hover {{
-            border-color: #334867;
-            background: #121a28;
+            border-color: #8b6f3d;
+            background: #fff7eb;
             transform: translateY(-1px);
           }}
           .field span,
           .compact-row span {{
             display: block;
-            color: #8f9aac;
+            color: #776954;
             font-size: 12px;
             font-weight: 700;
             text-transform: uppercase;
@@ -1425,15 +1444,15 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             display: block;
             min-width: 0;
             margin-top: 5px;
-            color: #f4f7fb;
+            color: #2d251b;
             font-size: 14px;
             line-height: 1.45;
             overflow-wrap: anywhere;
           }}
           code {{
-            color: #dbe8ff;
-            background: #0e1420;
-            border: 1px solid #263044;
+            color: #263853;
+            background: #efe3ce;
+            border: 1px solid #cbb890;
             border-radius: 6px;
             padding: 2px 5px;
           }}
@@ -1449,10 +1468,10 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             align-items: center;
             justify-content: center;
             min-height: 38px;
-            border: 1px solid #344055;
+            border: 1px solid #b8a783;
             border-radius: 8px;
-            background: #202838;
-            color: #f4f7fb;
+            background: #f7efe2;
+            color: #2d251b;
             padding: 8px 12px;
             text-decoration: none;
             font-weight: 720;
@@ -1464,20 +1483,22 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
               box-shadow 160ms ease;
           }}
           .button:hover:not(.disabled):not(:disabled) {{
-            border-color: #4d7fd9;
+            border-color: #8b6f3d;
             transform: translateY(-1px);
-            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 10px 24px rgba(71, 52, 30, 0.16);
           }}
           .button:active:not(.disabled):not(:disabled) {{
             transform: translateY(0);
           }}
           .button.primary {{
-            background: #2563eb;
-            border-color: #3b82f6;
+            background: #24344f;
+            border-color: #24344f;
+            color: #fffaf0;
           }}
           .button.danger {{
-            background: #8f1d2c;
-            border-color: #b82e41;
+            background: #8a2435;
+            border-color: #8a2435;
+            color: #fffaf0;
           }}
           .button.disabled,
           .button:disabled {{
@@ -1487,7 +1508,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           .subtle-button {{
             min-height: 32px;
             padding: 6px 10px;
-            background: #151b27;
+            background: #fbf4e8;
           }}
           .login-button {{
             width: 100%;
@@ -1507,17 +1528,17 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           label {{
             display: grid;
             gap: 6px;
-            color: #d9e0ec;
+            color: #463b2e;
             font-size: 13px;
             font-weight: 720;
           }}
           input,
           textarea {{
             width: 100%;
-            border: 1px solid #30384a;
+            border: 1px solid #b8a783;
             border-radius: 8px;
-            background: #0f1520;
-            color: #f4f7fb;
+            background: #fffaf0;
+            color: #2d251b;
             padding: 10px 11px;
             resize: vertical;
           }}
@@ -1530,7 +1551,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             animation: panelIn 300ms ease-out both;
           }}
           .list-item:hover {{
-            border-color: #334867;
+            border-color: #8b6f3d;
             transform: translateY(-1px);
           }}
           .list-item h2 {{
@@ -1548,23 +1569,23 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             margin-top: 8px;
           }}
           .notice {{
-            border: 1px solid #2f614c;
+            border: 1px solid #668a5a;
             border-radius: 8px;
-            background: #10231c;
-            color: #d9fff0;
+            background: #edf5e8;
+            color: #314c2c;
             padding: 12px 14px;
             animation: noticeIn 260ms ease-out both;
           }}
           .notice.error {{
-            border-color: #70313d;
-            background: #2a1118;
-            color: #ffd9df;
+            border-color: #a45a64;
+            background: #f8e6e4;
+            color: #6f1f2f;
           }}
           .empty-state {{
-            border: 1px dashed #344055;
+            border: 1px dashed #b8a783;
             border-radius: 8px;
             padding: 18px;
-            background: #111722;
+            background: #fbf4e8;
           }}
           .section-block {{
             display: grid;
@@ -1572,7 +1593,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           }}
           .separator {{
             height: 1px;
-            background: #293040;
+            background: #c9b894;
             margin: 18px 0;
           }}
           @media (max-width: 900px) {{
@@ -1613,6 +1634,85 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
       </head>
       <body>
         {body}
+        <script>
+          (() => {{
+            const copiedText = "Link copied!";
+            const errorText = "Copy failed";
+
+            const fallbackCopy = (text) => {{
+              const textarea = document.createElement("textarea");
+              textarea.value = text;
+              textarea.setAttribute("readonly", "");
+              textarea.style.position = "fixed";
+              textarea.style.top = "-999px";
+              textarea.style.left = "-999px";
+              document.body.appendChild(textarea);
+              textarea.select();
+              const copied = document.execCommand("copy");
+              textarea.remove();
+              if (!copied) {{
+                throw new Error("copy failed");
+              }}
+            }};
+
+            const copyText = async (text) => {{
+              if (navigator.clipboard && window.isSecureContext) {{
+                await navigator.clipboard.writeText(text);
+                return;
+              }}
+              fallbackCopy(text);
+            }};
+
+            const resetButton = (button, originalText) => {{
+              window.clearTimeout(Number(button.dataset.copyResetTimer || 0));
+              button.dataset.copyResetTimer = String(window.setTimeout(() => {{
+                button.textContent = originalText;
+                button.disabled = false;
+              }}, 2000));
+            }};
+
+            document.querySelectorAll("[data-copy-link-form]").forEach((form) => {{
+              form.addEventListener("submit", async (event) => {{
+                event.preventDefault();
+                const button = form.querySelector("[data-copy-link-button]");
+                if (!button) {{
+                  return;
+                }}
+
+                const originalText = button.dataset.originalText || button.textContent;
+                button.dataset.originalText = originalText;
+                button.disabled = true;
+
+                try {{
+                  const response = await fetch(form.action, {{
+                    method: "POST",
+                    body: new FormData(form),
+                    credentials: "same-origin",
+                    headers: {{
+                      "Accept": "application/json",
+                      "X-AuthSec-Copy-Link": "1",
+                    }},
+                  }});
+                  if (!response.ok) {{
+                    throw new Error("request failed");
+                  }}
+
+                  const payload = await response.json();
+                  if (!payload.url) {{
+                    throw new Error("missing url");
+                  }}
+
+                  await copyText(payload.url);
+                  button.textContent = copiedText;
+                }} catch (error) {{
+                  button.textContent = errorText;
+                }} finally {{
+                  resetButton(button, originalText);
+                }}
+              }});
+            }});
+          }})();
+        </script>
       </body>
     </html>
     """
