@@ -40,7 +40,7 @@ class DatabaseSettings:
 @dataclass(frozen=True)
 class OAuthSettings:
     request_timeout: int = 10
-    refresh_before_expiry_seconds: int = 14 * 24 * 60 * 60
+    refresh_before_expiry_seconds: int = 60 * 60
     state_ttl_seconds: int = 10 * 60
 
 
@@ -174,7 +174,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         oauth=OAuthSettings(
             request_timeout=int(oauth.get("request_timeout", 10)),
             refresh_before_expiry_seconds=int(
-                oauth.get("refresh_before_expiry_seconds", 14 * 24 * 60 * 60)
+                oauth.get("refresh_before_expiry_seconds", 60 * 60)
             ),
             state_ttl_seconds=int(oauth.get("state_ttl_seconds", 10 * 60)),
         ),

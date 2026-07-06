@@ -19,7 +19,7 @@
   },
   "oauth": {
     "request_timeout": 10,
-    "refresh_before_expiry_seconds": 1209600,
+    "refresh_before_expiry_seconds": 3600,
     "state_ttl_seconds": 600
   },
   "ipinfo": {
