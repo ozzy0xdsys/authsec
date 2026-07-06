@@ -123,6 +123,19 @@ class DiscordOAuthClient:
             )
         return saved
 
+    def complete_web_login(self, code: str) -> dict[str, Any]:
+        token = self._exchange_code(code)
+        access_token = _required(token, "access_token")
+        user = self.fetch_current_user_with_token(access_token)
+        self._revoke_tokens_quietly(
+            *[
+                str(value)
+                for value in (token.get("refresh_token"), access_token)
+                if value
+            ]
+        )
+        return user
+
     def get_account(
         self,
         owner_id: int,

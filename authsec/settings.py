@@ -29,6 +29,7 @@ class WebSettings:
     redirect_uri: str = DEFAULT_REDIRECT_URI
     force_https: bool = True
     clear_port_before_start: bool = True
+    session_secret: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,12 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         ("clear_port_before_start", "stop_port_processes"),
         ("AUTHSEC_CLEAR_WEB_PORT", "AUTHSEC_STOP_PORT_PROCESSES"),
     )
+    session_secret = _first_value(
+        web,
+        raw,
+        ("session_secret", "secret_key"),
+        ("AUTHSEC_SESSION_SECRET", "FLASK_SECRET_KEY"),
+    )
     ipinfo_token = (
         _first_mapping_value(ipinfo, ("token", "api_key", "key"))
         or _first_mapping_value(raw, ("ipinfo_token", "ipinfo_api_key"))
@@ -161,6 +168,7 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
             redirect_uri=str(redirect_uri or DEFAULT_REDIRECT_URI),
             force_https=_bool_value(force_https, True),
             clear_port_before_start=_bool_value(clear_port_before_start, True),
+            session_secret=str(session_secret) if session_secret else None,
         ),
         database=DatabaseSettings(path=database_path),
         oauth=OAuthSettings(
