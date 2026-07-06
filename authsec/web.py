@@ -141,13 +141,6 @@ def create_web_app(oauth_client: DiscordOAuthClient, bot_runtime: BotRuntime) ->
             return _page("Authorization failed", str(exc), exc.status_code)
 
         bot_runtime.notify_linked_account(account)
-        logged_in_user = _session_user()
-        if (
-            logged_in_user is not None
-            and _owner_id(logged_in_user) == account.owner_id
-        ):
-            _set_notice("Account linked.", "success")
-            return redirect(url_for("home"))
         return _close_tab_page()
 
     @app.get("/account/<int:account_id>")
