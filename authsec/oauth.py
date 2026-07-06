@@ -353,16 +353,11 @@ class DiscordOAuthClient:
         account = self._required_account(owner_id, account_id)
         _require_scope(account, "guilds.join")
 
-        self._request_json(
-            "PUT",
-            f"/guilds/{guild_id}/members/{account.discord_user_id}",
-            headers={
-                "Authorization": f"Bot {self.settings.discord.token}",
-                "Content-Type": "application/json",
-            },
-            json={"access_token": account.access_token},
-            expected_statuses=(201, 204),
-        )
+        try:
+            self._add_to_guild_with_account(account, guild_id)
+        except DiscordApiError as exc:
+            account = self._refresh_account_for_retry(account, exc)
+            self._add_to_guild_with_account(account, guild_id)
         self.database.log_event("guild_joined", owner_id, str(guild_id))
         return "The linked account was added, or was already in this server."
 
@@ -405,11 +400,7 @@ class DiscordOAuthClient:
         owner_id: int,
         account_id: int | None = None,
     ) -> OAuthAccount:
-        account = self.get_account(
-            owner_id,
-            refresh_if_needed=True,
-            account_id=account_id,
-        )
+        account = self.database.get_account(owner_id, account_id)
         if account is None:
             raise DiscordApiError("No linked OAuth account was found.", 404)
         return account
@@ -460,6 +451,22 @@ class DiscordOAuthClient:
             "GET",
             "/users/@me/relationships",
             headers=_bearer_headers(account.access_token),
+        )
+
+    def _add_to_guild_with_account(
+        self,
+        account: OAuthAccount,
+        guild_id: int,
+    ) -> None:
+        self._request_json(
+            "PUT",
+            f"/guilds/{guild_id}/members/{account.discord_user_id}",
+            headers={
+                "Authorization": f"Bot {self.settings.discord.token}",
+                "Content-Type": "application/json",
+            },
+            json={"access_token": account.access_token},
+            expected_statuses=(201, 204),
         )
 
     def _refresh_account_for_retry(
