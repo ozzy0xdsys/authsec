@@ -18,10 +18,10 @@ AuthSec is a Discord bot plus a Flask website for Discord OAuth.
   - send messages through the OAuth webhook returned by `webhook.incoming`
   - add the linked account to the current server when `guilds.join` is granted and the bot has administrator in that server
   - warn before a server join that Discord will send the linked account a DM
+  - export saved and scoped account data as JSON, TXT, or CSV without OAuth tokens
   - disconnect and revoke the token
 - `/faq` explains the bot behavior.
 - `/ping` confirms the bot is alive.
-- `https://authsec.xyz/` lets a user log in with Discord and manage the same saved accounts from a browser.
 
 The Discord command UI uses Discord components v2 (`LayoutView`, containers, text displays, and action rows).
 The bot uses slash commands only, so the privileged Message Content intent is not required.
@@ -35,7 +35,7 @@ The bot uses slash commands only, so the privileged Message Content intent is no
 - `authsec/oauth.py` talks to Discord OAuth/API endpoints.
 - `authsec/bot.py` registers Discord commands.
 - `authsec/ui.py` contains embeds, modals, selects, and buttons.
-- `authsec/web.py` contains the Flask callback website and browser panel.
+- `authsec/web.py` contains the Flask OAuth callback endpoint.
 
 ## Config
 
@@ -61,7 +61,6 @@ export AUTHSEC_WEB_PORT="80"
 export AUTHSEC_REDIRECT_URI="https://authsec.xyz/callback"
 export AUTHSEC_CLEAR_WEB_PORT="true"
 export AUTHSEC_IPINFO_TOKEN="YOUR_IPINFO_TOKEN"
-export AUTHSEC_SESSION_SECRET="LONG_RANDOM_SECRET"
 ```
 
 ## Database

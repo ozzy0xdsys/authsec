@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
+import json
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -327,6 +330,9 @@ class PanelView(discord.ui.LayoutView):
                     ),
                 ),
                 DisconnectButton(self, disabled=not has_account),
+            ),
+            discord.ui.ActionRow(
+                ExportAllDataButton(self, disabled=not bool(accounts)),
             ),
         ]
 
@@ -798,6 +804,106 @@ class CancelJoinServerButton(discord.ui.Button):
         )
 
 
+class ExportAllDataButton(discord.ui.Button):
+    def __init__(self, panel: PanelView, disabled: bool):
+        super().__init__(
+            label="Export all data",
+            style=discord.ButtonStyle.secondary,
+            disabled=disabled,
+        )
+        self.panel = panel
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            view=ExportFormatView(
+                self.panel.oauth_client,
+                self.panel.owner_id,
+            ),
+            ephemeral=True,
+        )
+
+
+class ExportFormatView(discord.ui.LayoutView):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__(timeout=180)
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "## Export all data\n"
+                    "Select an export file type. OAuth access tokens, refresh "
+                    "tokens, and webhook tokens are not included."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(ExportFormatSelect(self)),
+                accent_color=ACCENT_DEFAULT,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This export menu belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class ExportFormatSelect(discord.ui.Select):
+    def __init__(self, parent: ExportFormatView):
+        self.parent_view = parent
+        super().__init__(
+            placeholder="Choose export file type",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="JSON",
+                    value="json",
+                    description="Structured export for scripts or backups.",
+                ),
+                discord.SelectOption(
+                    label="TXT",
+                    value="txt",
+                    description="Readable plain text export.",
+                ),
+                discord.SelectOption(
+                    label="CSV",
+                    value="csv",
+                    description="Flat rows for spreadsheets.",
+                ),
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        export_format = self.values[0]
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            export_file = await asyncio.to_thread(
+                build_export_file,
+                self.parent_view.oauth_client,
+                self.parent_view.owner_id,
+                export_format,
+            )
+            await interaction.followup.send(
+                view=TextContainerView(
+                    "Export Ready",
+                    "The file contains saved account data and available scoped data.",
+                    ACCENT_SUCCESS,
+                ),
+                file=export_file,
+                ephemeral=True,
+            )
+        except DiscordApiError as exc:
+            await interaction.followup.send(
+                view=build_error_view(str(exc)),
+                ephemeral=True,
+            )
+
+
 class DisconnectButton(discord.ui.Button):
     def __init__(self, panel: PanelView, disabled: bool):
         super().__init__(
@@ -1054,6 +1160,338 @@ class RelationshipPageButton(discord.ui.Button):
                 self.relationships_view.page + self.direction,
             )
         )
+
+
+def build_export_file(
+    oauth_client: DiscordOAuthClient,
+    owner_id: int,
+    export_format: str,
+) -> discord.File:
+    export_format = export_format.lower().strip()
+    data = build_export_data(oauth_client, owner_id)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"authsec-export-{owner_id}-{timestamp}.{export_format}"
+
+    if export_format == "json":
+        content = json.dumps(data, indent=2, ensure_ascii=False)
+    elif export_format == "txt":
+        content = export_data_to_text(data)
+    elif export_format == "csv":
+        content = export_data_to_csv(data)
+    else:
+        raise DiscordApiError("Unsupported export format.", 400)
+
+    return discord.File(io.BytesIO(content.encode("utf-8")), filename=filename)
+
+
+def build_export_data(
+    oauth_client: DiscordOAuthClient,
+    owner_id: int,
+) -> dict[str, Any]:
+    accounts = oauth_client.get_accounts(owner_id, False)
+    export: dict[str, Any] = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "owner_id": str(owner_id),
+        "account_count": len(accounts),
+        "accounts": [],
+    }
+
+    for account in accounts:
+        account_data: dict[str, Any] = {
+            "stored_account": export_account_metadata(account),
+            "webhook": export_webhook_metadata(account),
+            "current_user": None,
+            "servers": [],
+            "server_member_details": {},
+            "connections": [],
+            "relationships": [],
+            "ip_info": None,
+            "errors": [],
+        }
+        account_id = account.account_id
+
+        _export_fetch(
+            account_data,
+            "current_user",
+            lambda: oauth_client.fetch_current_user(owner_id, account_id),
+        )
+        if account.has_scope("guilds"):
+            servers = _export_fetch(
+                account_data,
+                "servers",
+                lambda: oauth_client.fetch_guilds(owner_id, account_id),
+                default=[],
+            )
+            if account.has_scope("guilds.members.read") and servers:
+                guild_ids = [
+                    str(guild.get("id"))
+                    for guild in servers
+                    if isinstance(guild, dict) and guild.get("id")
+                ]
+                _export_fetch(
+                    account_data,
+                    "server_member_details",
+                    lambda: oauth_client.fetch_guild_member_details(
+                        owner_id,
+                        guild_ids,
+                        account_id,
+                    ),
+                    default={},
+                )
+        if account.has_scope("connections"):
+            _export_fetch(
+                account_data,
+                "connections",
+                lambda: oauth_client.fetch_connections(owner_id, account_id),
+                default=[],
+            )
+        if account.has_scope("relationships.read"):
+            _export_fetch(
+                account_data,
+                "relationships",
+                lambda: oauth_client.fetch_relationships(owner_id, account_id),
+                default=[],
+            )
+        if account.ip_address:
+            _export_fetch(
+                account_data,
+                "ip_info",
+                lambda: oauth_client.fetch_ip_info(account.ip_address),
+            )
+
+        export["accounts"].append(sanitize_export_value(account_data))
+
+    return export
+
+
+def _export_fetch(
+    account_data: dict[str, Any],
+    key: str,
+    fetcher,
+    default: Any = None,
+) -> Any:
+    try:
+        value = fetcher()
+    except DiscordApiError as exc:
+        account_data["errors"].append({"section": key, "message": str(exc)})
+        if default is not None:
+            account_data[key] = default
+            return default
+        return None
+
+    value = sanitize_export_value(value)
+    account_data[key] = value
+    return value
+
+
+def export_account_metadata(account: OAuthAccount) -> dict[str, Any]:
+    return {
+        "account_id": account.account_id,
+        "owner_id": str(account.owner_id),
+        "discord_user_id": account.discord_user_id,
+        "username": account.username,
+        "global_name": account.global_name,
+        "display_name": account.display_name,
+        "mfa_enabled": account.mfa_enabled,
+        "scopes": list(account.scopes),
+        "ip_address": account.ip_address,
+        "user_agent": account.user_agent,
+        "created_at": account.created_at,
+        "created_at_formatted": _export_epoch(account.created_at),
+        "updated_at": account.updated_at,
+        "updated_at_formatted": _export_epoch(account.updated_at),
+        "token_expires_at": account.expires_at,
+        "token_expires_at_formatted": _export_epoch(account.expires_at),
+    }
+
+
+def export_webhook_metadata(account: OAuthAccount) -> dict[str, Any]:
+    return {
+        "stored": account.has_webhook,
+        "id": account.webhook_id,
+        "channel_id": account.webhook_channel_id,
+        "guild_id": account.webhook_guild_id,
+        "name": account.webhook_name,
+    }
+
+
+def sanitize_export_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if is_sensitive_export_key(key_text):
+                continue
+            cleaned[key_text] = sanitize_export_value(item)
+        return cleaned
+    if isinstance(value, list):
+        return [sanitize_export_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_export_value(item) for item in value]
+    return value
+
+
+def is_sensitive_export_key(key: str) -> bool:
+    normalized = key.lower()
+    return normalized in {
+        "access_token",
+        "refresh_token",
+        "webhook_token",
+        "token",
+    } or normalized.endswith("_token")
+
+
+def export_data_to_text(data: dict[str, Any]) -> str:
+    return "\n".join(text_export_lines("AuthSec Export", data))
+
+
+def text_export_lines(label: str, value: Any, indent: int = 0) -> list[str]:
+    prefix = "  " * indent
+    lines = [f"{prefix}{label}:"]
+    if isinstance(value, dict):
+        if not value:
+            lines[-1] += " {}"
+            return lines
+        for key, item in value.items():
+            lines.extend(text_export_lines(str(key), item, indent + 1))
+        return lines
+    if isinstance(value, list):
+        if not value:
+            lines[-1] += " []"
+            return lines
+        for index, item in enumerate(value, 1):
+            lines.extend(text_export_lines(f"- {index}", item, indent + 1))
+        return lines
+
+    lines[-1] += f" {value if value is not None else 'None'}"
+    return lines
+
+
+def export_data_to_csv(data: dict[str, Any]) -> str:
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "account_id",
+            "discord_user_id",
+            "section",
+            "item_id",
+            "name",
+            "data_json",
+        ],
+    )
+    writer.writeheader()
+
+    for account_entry in data.get("accounts", []):
+        stored = account_entry.get("stored_account", {})
+        account_id = stored.get("account_id")
+        discord_user_id = stored.get("discord_user_id")
+        write_export_csv_row(writer, account_id, discord_user_id, "account", stored)
+        write_export_csv_row(
+            writer,
+            account_id,
+            discord_user_id,
+            "webhook",
+            account_entry.get("webhook", {}),
+        )
+        write_export_csv_row(
+            writer,
+            account_id,
+            discord_user_id,
+            "current_user",
+            account_entry.get("current_user"),
+        )
+        write_export_csv_row(
+            writer,
+            account_id,
+            discord_user_id,
+            "ip_info",
+            account_entry.get("ip_info"),
+        )
+        for server in account_entry.get("servers", []):
+            write_export_csv_row(writer, account_id, discord_user_id, "server", server)
+        for guild_id, detail in account_entry.get("server_member_details", {}).items():
+            write_export_csv_row(
+                writer,
+                account_id,
+                discord_user_id,
+                "server_member_detail",
+                {"guild_id": guild_id, "member": detail},
+            )
+        for connection in account_entry.get("connections", []):
+            write_export_csv_row(
+                writer,
+                account_id,
+                discord_user_id,
+                "connection",
+                connection,
+            )
+        for relationship in account_entry.get("relationships", []):
+            write_export_csv_row(
+                writer,
+                account_id,
+                discord_user_id,
+                "relationship",
+                relationship,
+            )
+        for error in account_entry.get("errors", []):
+            write_export_csv_row(writer, account_id, discord_user_id, "error", error)
+
+    return output.getvalue()
+
+
+def write_export_csv_row(
+    writer: csv.DictWriter,
+    account_id: Any,
+    discord_user_id: Any,
+    section: str,
+    data: Any,
+) -> None:
+    if data in (None, [], {}):
+        return
+    writer.writerow(
+        {
+            "account_id": account_id,
+            "discord_user_id": discord_user_id,
+            "section": section,
+            "item_id": export_item_id(data),
+            "name": export_item_name(data),
+            "data_json": json.dumps(data, ensure_ascii=False, sort_keys=True),
+        }
+    )
+
+
+def export_item_id(data: Any) -> str:
+    if isinstance(data, dict):
+        user = data.get("user") if isinstance(data.get("user"), dict) else {}
+        value = data.get("id") or data.get("guild_id") or user.get("id")
+        if value is not None:
+            return str(value)
+    return ""
+
+
+def export_item_name(data: Any) -> str:
+    if isinstance(data, dict):
+        user = data.get("user") if isinstance(data.get("user"), dict) else {}
+        value = (
+            data.get("name")
+            or data.get("username")
+            or data.get("global_name")
+            or user.get("global_name")
+            or user.get("username")
+        )
+        if value is not None:
+            return str(value)
+    return ""
+
+
+def _export_epoch(value: int | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value), timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def oauth_scope_options() -> list[discord.SelectOption]:

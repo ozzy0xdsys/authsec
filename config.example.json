@@ -11,8 +11,7 @@
     "port": 80,
     "redirect_uri": "https://authsec.xyz/callback",
     "force_https": true,
-    "clear_port_before_start": true,
-    "session_secret": null
+    "clear_port_before_start": true
   },
   "database": {
     "path": "authsec.sqlite3"
