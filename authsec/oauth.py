@@ -18,9 +18,15 @@ AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 
 
 class DiscordApiError(RuntimeError):
-    def __init__(self, message: str, status_code: int = 502):
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 502,
+        api_status_code: int | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.api_status_code = api_status_code
 
 
 class DiscordOAuthClient:
@@ -182,7 +188,16 @@ class DiscordOAuthClient:
         if not force and seconds_left > self.settings.oauth.refresh_before_expiry_seconds:
             return account
 
-        token = self._refresh_token(account.refresh_token)
+        try:
+            token = self._refresh_token(account.refresh_token)
+        except DiscordApiError as exc:
+            if _is_invalid_grant_error(exc):
+                raise DiscordApiError(
+                    "Discord authorization expired. Re-authorize this account.",
+                    401,
+                    exc.api_status_code,
+                ) from exc
+            raise
         now = int(time.time())
         access_token = _required(token, "access_token")
         user_payload = safe_user_payload(self.fetch_current_user_with_token(access_token))
@@ -234,7 +249,11 @@ class DiscordOAuthClient:
         account_id: int | None = None,
     ) -> dict[str, Any]:
         account = self._required_account(owner_id, account_id)
-        return self.fetch_current_user_with_token(account.access_token)
+        try:
+            return self.fetch_current_user_with_token(account.access_token)
+        except DiscordApiError as exc:
+            account = self._refresh_account_for_retry(account, exc)
+            return self.fetch_current_user_with_token(account.access_token)
 
     def fetch_current_user_with_token(self, access_token: str) -> dict[str, Any]:
         return self._request_json(
@@ -250,12 +269,11 @@ class DiscordOAuthClient:
     ) -> list[dict[str, Any]]:
         account = self._required_account(owner_id, account_id)
         _require_scope(account, "guilds")
-        payload = self._request_json(
-            "GET",
-            "/users/@me/guilds",
-            headers=_bearer_headers(account.access_token),
-            params={"with_counts": "true"},
-        )
+        try:
+            payload = self._fetch_guilds_with_account(account)
+        except DiscordApiError as exc:
+            account = self._refresh_account_for_retry(account, exc)
+            payload = self._fetch_guilds_with_account(account)
         if isinstance(payload, list):
             return payload
         raise DiscordApiError("Discord returned an unexpected guild list.", 502)
@@ -269,24 +287,11 @@ class DiscordOAuthClient:
         account = self._required_account(owner_id, account_id)
         _require_scope(account, "guilds.members.read")
 
-        details = {}
-        for guild_id in guild_ids:
-            if not guild_id:
-                continue
-
-            try:
-                payload = self._request_json(
-                    "GET",
-                    f"/users/@me/guilds/{guild_id}/member",
-                    headers=_bearer_headers(account.access_token),
-                )
-            except DiscordApiError:
-                continue
-
-            if isinstance(payload, dict):
-                details[str(guild_id)] = payload
-
-        return details
+        try:
+            return self._fetch_guild_member_details_with_account(account, guild_ids)
+        except DiscordApiError as exc:
+            account = self._refresh_account_for_retry(account, exc)
+            return self._fetch_guild_member_details_with_account(account, guild_ids)
 
     def fetch_connections(
         self,
@@ -295,11 +300,11 @@ class DiscordOAuthClient:
     ) -> list[dict[str, Any]]:
         account = self._required_account(owner_id, account_id)
         _require_scope(account, "connections")
-        payload = self._request_json(
-            "GET",
-            "/users/@me/connections",
-            headers=_bearer_headers(account.access_token),
-        )
+        try:
+            payload = self._fetch_connections_with_account(account)
+        except DiscordApiError as exc:
+            account = self._refresh_account_for_retry(account, exc)
+            payload = self._fetch_connections_with_account(account)
         if isinstance(payload, list):
             return payload
         raise DiscordApiError("Discord returned an unexpected connection list.", 502)
@@ -311,11 +316,11 @@ class DiscordOAuthClient:
     ) -> list[dict[str, Any]]:
         account = self._required_account(owner_id, account_id)
         _require_scope(account, "relationships.read")
-        payload = self._request_json(
-            "GET",
-            "/users/@me/relationships",
-            headers=_bearer_headers(account.access_token),
-        )
+        try:
+            payload = self._fetch_relationships_with_account(account)
+        except DiscordApiError as exc:
+            account = self._refresh_account_for_retry(account, exc)
+            payload = self._fetch_relationships_with_account(account)
         if isinstance(payload, list):
             return payload
         if isinstance(payload, dict) and isinstance(payload.get("relationships"), list):
@@ -408,6 +413,73 @@ class DiscordOAuthClient:
         if account is None:
             raise DiscordApiError("No linked OAuth account was found.", 404)
         return account
+
+    def _fetch_guilds_with_account(self, account: OAuthAccount) -> Any:
+        return self._request_json(
+            "GET",
+            "/users/@me/guilds",
+            headers=_bearer_headers(account.access_token),
+            params={"with_counts": "true"},
+        )
+
+    def _fetch_guild_member_details_with_account(
+        self,
+        account: OAuthAccount,
+        guild_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        details = {}
+        for guild_id in guild_ids:
+            if not guild_id:
+                continue
+
+            try:
+                payload = self._request_json(
+                    "GET",
+                    f"/users/@me/guilds/{guild_id}/member",
+                    headers=_bearer_headers(account.access_token),
+                )
+            except DiscordApiError as exc:
+                if _is_unauthorized_error(exc):
+                    raise
+                continue
+
+            if isinstance(payload, dict):
+                details[str(guild_id)] = payload
+
+        return details
+
+    def _fetch_connections_with_account(self, account: OAuthAccount) -> Any:
+        return self._request_json(
+            "GET",
+            "/users/@me/connections",
+            headers=_bearer_headers(account.access_token),
+        )
+
+    def _fetch_relationships_with_account(self, account: OAuthAccount) -> Any:
+        return self._request_json(
+            "GET",
+            "/users/@me/relationships",
+            headers=_bearer_headers(account.access_token),
+        )
+
+    def _refresh_account_for_retry(
+        self,
+        account: OAuthAccount,
+        exc: DiscordApiError,
+    ) -> OAuthAccount:
+        if not _is_unauthorized_error(exc):
+            raise exc
+
+        try:
+            return self._refresh_loaded_account(account, force=True)
+        except DiscordApiError as refresh_exc:
+            if _is_invalid_grant_error(refresh_exc):
+                raise DiscordApiError(
+                    "Discord authorization expired. Re-authorize this account.",
+                    401,
+                    refresh_exc.api_status_code,
+                ) from refresh_exc
+            raise
 
     def _stored_account_for_discord_user(
         self,
@@ -503,6 +575,7 @@ class DiscordOAuthClient:
             raise DiscordApiError(
                 _api_error_message(response, "IPinfo"),
                 400 if response.status_code < 500 else 502,
+                response.status_code,
             )
 
         try:
@@ -536,6 +609,7 @@ class DiscordOAuthClient:
             raise DiscordApiError(
                 _discord_error_message(response),
                 400 if response.status_code < 500 else 502,
+                response.status_code,
             )
 
         if response.status_code == 204 or not response.text:
@@ -615,6 +689,17 @@ def _optional_string(value: Any) -> str | None:
 def _require_scope(account: OAuthAccount, scope: str) -> None:
     if not account.has_scope(scope):
         raise DiscordApiError(f"The linked account is missing the {scope} scope.", 403)
+
+
+def _is_unauthorized_error(exc: DiscordApiError) -> bool:
+    if exc.api_status_code == 401:
+        return True
+    text = str(exc).lower()
+    return "401" in text and "unauthorized" in text
+
+
+def _is_invalid_grant_error(exc: DiscordApiError) -> bool:
+    return "invalid_grant" in str(exc).lower()
 
 
 def _discord_error_message(response: requests.Response) -> str:

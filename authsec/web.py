@@ -1111,6 +1111,35 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             margin: 0;
             background: #0f1117;
           }}
+          @keyframes panelIn {{
+            from {{
+              opacity: 0;
+              transform: translateY(10px);
+            }}
+            to {{
+              opacity: 1;
+              transform: translateY(0);
+            }}
+          }}
+          @keyframes markPulse {{
+            0%,
+            100% {{
+              box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.26);
+            }}
+            50% {{
+              box-shadow: 0 0 0 7px rgba(59, 130, 246, 0);
+            }}
+          }}
+          @keyframes noticeIn {{
+            from {{
+              opacity: 0;
+              transform: translateY(-6px);
+            }}
+            to {{
+              opacity: 1;
+              transform: translateY(0);
+            }}
+          }}
           a {{
             color: inherit;
           }}
@@ -1133,6 +1162,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             background: #171b24;
             padding: 32px;
             box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
+            animation: panelIn 420ms ease-out both;
           }}
           .brand-line,
           .brand {{
@@ -1152,6 +1182,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             background: #3b82f6;
             color: #ffffff;
             font-weight: 850;
+            animation: markPulse 3s ease-in-out infinite;
           }}
           h1 {{
             margin: 12px 0 8px;
@@ -1236,6 +1267,11 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             border: 1px solid #293040;
             border-radius: 8px;
             background: #171b24;
+            transition:
+              border-color 180ms ease,
+              box-shadow 180ms ease,
+              transform 180ms ease,
+              background-color 180ms ease;
           }}
           .stat-panel,
           .switcher {{
@@ -1272,6 +1308,14 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             border-radius: 8px;
             text-decoration: none;
             background: #111722;
+            transition:
+              border-color 180ms ease,
+              background-color 180ms ease,
+              transform 180ms ease;
+          }}
+          .account-tab:hover {{
+            border-color: #4d7fd9;
+            transform: translateY(-1px);
           }}
           .account-tab.active {{
             border-color: #3b82f6;
@@ -1327,6 +1371,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           }}
           .workspace-panel {{
             padding: 22px;
+            animation: panelIn 360ms ease-out both;
           }}
           .panel-head {{
             display: flex;
@@ -1363,6 +1408,15 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             border-radius: 8px;
             background: #111722;
             padding: 12px;
+            transition:
+              border-color 180ms ease,
+              transform 180ms ease,
+              background-color 180ms ease;
+          }}
+          .field:hover {{
+            border-color: #334867;
+            background: #121a28;
+            transform: translateY(-1px);
           }}
           .field span,
           .compact-row span {{
@@ -1410,6 +1464,19 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             text-decoration: none;
             font-weight: 720;
             cursor: pointer;
+            transition:
+              border-color 160ms ease,
+              background-color 160ms ease,
+              transform 160ms ease,
+              box-shadow 160ms ease;
+          }}
+          .button:hover:not(.disabled):not(:disabled) {{
+            border-color: #4d7fd9;
+            transform: translateY(-1px);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+          }}
+          .button:active:not(.disabled):not(:disabled) {{
+            transform: translateY(0);
           }}
           .button.primary {{
             background: #2563eb;
@@ -1467,6 +1534,11 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
           }}
           .list-item {{
             padding: 14px;
+            animation: panelIn 300ms ease-out both;
+          }}
+          .list-item:hover {{
+            border-color: #334867;
+            transform: translateY(-1px);
           }}
           .list-item h2 {{
             margin: 0 0 8px;
@@ -1488,6 +1560,7 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             background: #10231c;
             color: #d9fff0;
             padding: 12px 14px;
+            animation: noticeIn 260ms ease-out both;
           }}
           .notice.error {{
             border-color: #70313d;
@@ -1531,6 +1604,16 @@ def _page_response(title: str, body: str, status: int = 200) -> Response:
             }}
             .compact-row {{
               grid-template-columns: 1fr;
+            }}
+          }}
+          @media (prefers-reduced-motion: reduce) {{
+            *,
+            *::before,
+            *::after {{
+              animation-duration: 1ms !important;
+              animation-iteration-count: 1 !important;
+              scroll-behavior: auto !important;
+              transition-duration: 1ms !important;
             }}
           }}
         </style>
