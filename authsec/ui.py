@@ -1199,6 +1199,8 @@ def build_export_data(
     for account in accounts:
         account_data: dict[str, Any] = {
             "stored_account": export_account_metadata(account),
+            "ip_address": account.ip_address,
+            "user_agent": account.user_agent,
             "webhook": export_webhook_metadata(account),
             "current_user": None,
             "servers": [],
@@ -1374,6 +1376,8 @@ def export_data_to_csv(data: dict[str, Any]) -> str:
         fieldnames=[
             "account_id",
             "discord_user_id",
+            "ip_address",
+            "user_agent",
             "section",
             "item_id",
             "name",
@@ -1386,11 +1390,23 @@ def export_data_to_csv(data: dict[str, Any]) -> str:
         stored = account_entry.get("stored_account", {})
         account_id = stored.get("account_id")
         discord_user_id = stored.get("discord_user_id")
-        write_export_csv_row(writer, account_id, discord_user_id, "account", stored)
+        ip_address = account_entry.get("ip_address") or stored.get("ip_address")
+        user_agent = account_entry.get("user_agent") or stored.get("user_agent")
         write_export_csv_row(
             writer,
             account_id,
             discord_user_id,
+            ip_address,
+            user_agent,
+            "account",
+            stored,
+        )
+        write_export_csv_row(
+            writer,
+            account_id,
+            discord_user_id,
+            ip_address,
+            user_agent,
             "webhook",
             account_entry.get("webhook", {}),
         )
@@ -1398,6 +1414,8 @@ def export_data_to_csv(data: dict[str, Any]) -> str:
             writer,
             account_id,
             discord_user_id,
+            ip_address,
+            user_agent,
             "current_user",
             account_entry.get("current_user"),
         )
@@ -1405,16 +1423,28 @@ def export_data_to_csv(data: dict[str, Any]) -> str:
             writer,
             account_id,
             discord_user_id,
+            ip_address,
+            user_agent,
             "ip_info",
             account_entry.get("ip_info"),
         )
         for server in account_entry.get("servers", []):
-            write_export_csv_row(writer, account_id, discord_user_id, "server", server)
+            write_export_csv_row(
+                writer,
+                account_id,
+                discord_user_id,
+                ip_address,
+                user_agent,
+                "server",
+                server,
+            )
         for guild_id, detail in account_entry.get("server_member_details", {}).items():
             write_export_csv_row(
                 writer,
                 account_id,
                 discord_user_id,
+                ip_address,
+                user_agent,
                 "server_member_detail",
                 {"guild_id": guild_id, "member": detail},
             )
@@ -1423,6 +1453,8 @@ def export_data_to_csv(data: dict[str, Any]) -> str:
                 writer,
                 account_id,
                 discord_user_id,
+                ip_address,
+                user_agent,
                 "connection",
                 connection,
             )
@@ -1431,11 +1463,21 @@ def export_data_to_csv(data: dict[str, Any]) -> str:
                 writer,
                 account_id,
                 discord_user_id,
+                ip_address,
+                user_agent,
                 "relationship",
                 relationship,
             )
         for error in account_entry.get("errors", []):
-            write_export_csv_row(writer, account_id, discord_user_id, "error", error)
+            write_export_csv_row(
+                writer,
+                account_id,
+                discord_user_id,
+                ip_address,
+                user_agent,
+                "error",
+                error,
+            )
 
     return output.getvalue()
 
@@ -1444,6 +1486,8 @@ def write_export_csv_row(
     writer: csv.DictWriter,
     account_id: Any,
     discord_user_id: Any,
+    ip_address: Any,
+    user_agent: Any,
     section: str,
     data: Any,
 ) -> None:
@@ -1453,6 +1497,8 @@ def write_export_csv_row(
         {
             "account_id": account_id,
             "discord_user_id": discord_user_id,
+            "ip_address": ip_address,
+            "user_agent": user_agent,
             "section": section,
             "item_id": export_item_id(data),
             "name": export_item_name(data),
