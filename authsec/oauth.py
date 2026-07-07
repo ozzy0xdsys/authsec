@@ -2,14 +2,27 @@ from __future__ import annotations
 
 import secrets
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from threading import RLock
 from typing import Any
 from urllib.parse import quote, urlencode
 
 import requests
 
 from .database import AccountLimitError, AuthDatabase
-from .models import OAuthAccount, safe_user_payload
+from .encryption import (
+    decrypt_text,
+    encrypt_text,
+    password_sha256,
+    validate_password_length,
+)
+from .models import (
+    DEFAULT_PANEL_TIMEOUT_SECONDS,
+    PANEL_TIMEOUT_OPTIONS,
+    OAuthAccount,
+    OwnerSecuritySettings,
+    safe_user_payload,
+)
 from .settings import Settings
 
 
@@ -29,13 +42,145 @@ class DiscordApiError(RuntimeError):
         self.api_status_code = api_status_code
 
 
+@dataclass
+class OwnerUnlock:
+    password: str
+    expires_at: float
+
+
 class DiscordOAuthClient:
     def __init__(self, settings: Settings, database: AuthDatabase):
         self.settings = settings
         self.database = database
         self.session = requests.Session()
+        self._unlock_lock = RLock()
+        self._owner_unlocks: dict[int, OwnerUnlock] = {}
+
+    def get_security_settings(self, owner_id: int) -> OwnerSecuritySettings:
+        return self.database.get_security_settings(owner_id)
+
+    def is_encryption_enabled(self, owner_id: int) -> bool:
+        settings = self.get_security_settings(owner_id)
+        return bool(settings.encryption_enabled and settings.password_hash)
+
+    def owner_requires_unlock(self, owner_id: int) -> bool:
+        return (
+            self.is_encryption_enabled(owner_id)
+            and self._cached_password(owner_id) is None
+        )
+
+    def owner_is_unlocked(self, owner_id: int) -> bool:
+        return (
+            self.is_encryption_enabled(owner_id)
+            and self._cached_password(owner_id) is not None
+        )
+
+    def owner_unlock_expires_at(self, owner_id: int) -> int | None:
+        with self._unlock_lock:
+            unlock = self._owner_unlocks.get(int(owner_id))
+            if unlock is None:
+                return None
+            if unlock.expires_at <= time.time():
+                self._owner_unlocks.pop(int(owner_id), None)
+                return None
+            return int(unlock.expires_at)
+
+    def panel_timeout_seconds(self, owner_id: int) -> int:
+        settings = self.get_security_settings(owner_id)
+        return normalized_panel_timeout(settings.panel_timeout_seconds)
+
+    def unlock_owner(self, owner_id: int, password: str) -> None:
+        password = str(password)
+        validate_owner_password(password)
+        settings = self.get_security_settings(owner_id)
+        if not settings.encryption_enabled or not settings.password_hash:
+            return
+        if password_sha256(password) != settings.password_hash:
+            raise DiscordApiError("Incorrect encryption password.", 401)
+        self._cache_password(owner_id, password, settings.panel_timeout_seconds)
+
+    def enable_encryption(self, owner_id: int, password: str) -> OwnerSecuritySettings:
+        password = str(password)
+        validate_owner_password(password)
+        settings = self.get_security_settings(owner_id)
+        if settings.encryption_enabled:
+            raise DiscordApiError("Encryption is already enabled.", 400)
+
+        updated_settings = replace(
+            settings,
+            password_hash=password_sha256(password),
+            encryption_enabled=True,
+            panel_timeout_seconds=normalized_panel_timeout(
+                settings.panel_timeout_seconds
+            ),
+            updated_at=int(time.time()),
+        )
+        self.database.save_security_settings(updated_settings)
+        self._cache_password(owner_id, password, updated_settings.panel_timeout_seconds)
+
+        for account in self.database.get_accounts(owner_id):
+            self._save_account(account)
+
+        self.database.log_event("encryption_enabled", owner_id)
+        return self.get_security_settings(owner_id)
+
+    def disable_encryption(self, owner_id: int, password: str) -> OwnerSecuritySettings:
+        password = str(password)
+        validate_owner_password(password)
+        settings = self.get_security_settings(owner_id)
+        if not settings.encryption_enabled:
+            return settings
+        if (
+            not settings.password_hash
+            or password_sha256(password) != settings.password_hash
+        ):
+            raise DiscordApiError("Incorrect encryption password.", 401)
+
+        decrypted_accounts = [
+            self._decrypt_account_with_password(account, password)
+            for account in self.database.get_accounts(owner_id)
+        ]
+        updated_settings = replace(
+            settings,
+            password_hash=None,
+            encryption_enabled=False,
+            panel_timeout_seconds=normalized_panel_timeout(
+                settings.panel_timeout_seconds
+            ),
+            updated_at=int(time.time()),
+        )
+        self.database.save_security_settings(updated_settings)
+        self.clear_owner_unlock(owner_id)
+
+        for account in decrypted_accounts:
+            self.database.save_account(account)
+
+        self.database.log_event("encryption_disabled", owner_id)
+        return self.get_security_settings(owner_id)
+
+    def set_panel_timeout(self, owner_id: int, seconds: int) -> OwnerSecuritySettings:
+        seconds = normalized_panel_timeout(seconds)
+        settings = self.get_security_settings(owner_id)
+        updated_settings = replace(
+            settings,
+            panel_timeout_seconds=seconds,
+            updated_at=int(time.time()),
+        )
+        saved = self.database.save_security_settings(updated_settings)
+
+        with self._unlock_lock:
+            unlock = self._owner_unlocks.get(int(owner_id))
+            if unlock is not None and unlock.expires_at > time.time():
+                unlock.expires_at = time.time() + seconds
+
+        return saved
+
+    def clear_owner_unlock(self, owner_id: int) -> None:
+        with self._unlock_lock:
+            self._owner_unlocks.pop(int(owner_id), None)
 
     def build_authorization_url(self, owner_id: int, scopes: list[str]) -> str:
+        self._require_encryption_ready(owner_id)
         clean_scopes = normalize_scopes(scopes)
         state = secrets.token_urlsafe(32)
         self.database.cleanup_states()
@@ -65,6 +210,7 @@ class DiscordOAuthClient:
         saved_state = self.database.consume_state(state)
         if saved_state is None:
             raise DiscordApiError("This authorization link expired or was already used.", 400)
+        self._require_encryption_ready(saved_state.owner_id)
 
         token = self._exchange_code(code)
         access_token = _required(token, "access_token")
@@ -116,7 +262,7 @@ class DiscordOAuthClient:
             **webhook,
         )
         try:
-            saved = self.database.save_account(account)
+            saved = self._save_account(account)
         except AccountLimitError as exc:
             self._revoke_tokens_quietly(refresh_token, access_token)
             raise DiscordApiError(str(exc), 400) from exc
@@ -135,7 +281,7 @@ class DiscordOAuthClient:
         refresh_if_needed: bool = True,
         account_id: int | None = None,
     ) -> OAuthAccount | None:
-        account = self.database.get_account(owner_id, account_id)
+        account = self._load_account(owner_id, account_id)
         if account is None or not refresh_if_needed:
             return account
 
@@ -150,7 +296,7 @@ class DiscordOAuthClient:
         owner_id: int,
         refresh_if_needed: bool = True,
     ) -> list[OAuthAccount]:
-        accounts = self.database.get_accounts(owner_id)
+        accounts = self._load_accounts(owner_id)
         if not refresh_if_needed:
             return accounts
 
@@ -168,7 +314,7 @@ class DiscordOAuthClient:
         force: bool = False,
         account_id: int | None = None,
     ) -> OAuthAccount:
-        account = self.database.get_account(owner_id, account_id)
+        account = self._load_account(owner_id, account_id)
         if account is None:
             raise DiscordApiError("No linked OAuth account was found.", 404)
 
@@ -219,7 +365,7 @@ class DiscordOAuthClient:
             updated_at=now,
             **webhook,
         )
-        saved = self.database.save_account(updated)
+        saved = self._save_account(updated)
         self.database.log_event("oauth_refreshed", saved.owner_id, saved.discord_user_id)
         return saved
 
@@ -228,7 +374,7 @@ class DiscordOAuthClient:
         owner_id: int,
         account_id: int | None = None,
     ) -> bool:
-        account = self.database.get_account(owner_id, account_id)
+        account = self._load_account(owner_id, account_id)
         if account is None:
             return False
 
@@ -395,10 +541,110 @@ class DiscordOAuthClient:
         owner_id: int,
         account_id: int | None = None,
     ) -> OAuthAccount:
-        account = self.database.get_account(owner_id, account_id)
+        account = self._load_account(owner_id, account_id)
         if account is None:
             raise DiscordApiError("No linked OAuth account was found.", 404)
         return account
+
+    def _load_accounts(self, owner_id: int) -> list[OAuthAccount]:
+        return [
+            self._decrypt_account(account)
+            for account in self.database.get_accounts(owner_id)
+        ]
+
+    def _load_account(
+        self,
+        owner_id: int,
+        account_id: int | None = None,
+    ) -> OAuthAccount | None:
+        account = self.database.get_account(owner_id, account_id)
+        if account is None:
+            return None
+        return self._decrypt_account(account)
+
+    def _save_account(self, account: OAuthAccount) -> OAuthAccount:
+        stored_account = self._encrypt_account(account)
+        saved = self.database.save_account(stored_account)
+        return self._decrypt_account(saved)
+
+    def _encrypt_account(self, account: OAuthAccount) -> OAuthAccount:
+        if not self.is_encryption_enabled(account.owner_id):
+            return account
+
+        password = self._password_or_error(account.owner_id)
+        return replace(
+            account,
+            access_token=encrypt_text(account.access_token, password) or "",
+            refresh_token=encrypt_text(account.refresh_token, password) or "",
+            ip_address=encrypt_text(account.ip_address, password),
+            user_agent=encrypt_text(account.user_agent, password),
+            webhook_token=encrypt_text(account.webhook_token, password),
+        )
+
+    def _decrypt_account(self, account: OAuthAccount) -> OAuthAccount:
+        if not self.is_encryption_enabled(account.owner_id):
+            return account
+
+        return self._decrypt_account_with_password(
+            account,
+            self._password_or_error(account.owner_id),
+        )
+
+    def _decrypt_account_with_password(
+        self,
+        account: OAuthAccount,
+        password: str,
+    ) -> OAuthAccount:
+        try:
+            return replace(
+                account,
+                access_token=decrypt_text(account.access_token, password) or "",
+                refresh_token=decrypt_text(account.refresh_token, password) or "",
+                ip_address=decrypt_text(account.ip_address, password),
+                user_agent=decrypt_text(account.user_agent, password),
+                webhook_token=decrypt_text(account.webhook_token, password),
+            )
+        except ValueError as exc:
+            raise DiscordApiError(
+                "Could not decrypt saved account data. Check the encryption password.",
+                401,
+            ) from exc
+
+    def _password_or_error(self, owner_id: int) -> str:
+        password = self._cached_password(owner_id)
+        if password is None:
+            raise DiscordApiError(
+                "Enter your encryption password to unlock saved account data.",
+                401,
+            )
+        return password
+
+    def _require_encryption_ready(self, owner_id: int) -> None:
+        if self.is_encryption_enabled(owner_id):
+            self._password_or_error(owner_id)
+
+    def _cached_password(self, owner_id: int) -> str | None:
+        owner_id = int(owner_id)
+        with self._unlock_lock:
+            unlock = self._owner_unlocks.get(owner_id)
+            if unlock is None:
+                return None
+            if unlock.expires_at <= time.time():
+                self._owner_unlocks.pop(owner_id, None)
+                return None
+            return unlock.password
+
+    def _cache_password(
+        self,
+        owner_id: int,
+        password: str,
+        timeout_seconds: int,
+    ) -> None:
+        with self._unlock_lock:
+            self._owner_unlocks[int(owner_id)] = OwnerUnlock(
+                password=password,
+                expires_at=time.time() + normalized_panel_timeout(timeout_seconds),
+            )
 
     def _fetch_guilds_with_account(self, account: OAuthAccount) -> Any:
         return self._request_json(
@@ -488,7 +734,7 @@ class DiscordOAuthClient:
         owner_id: int,
         discord_user_id: str,
     ) -> OAuthAccount | None:
-        for account in self.database.get_accounts(owner_id):
+        for account in self._load_accounts(owner_id):
             if account.discord_user_id == str(discord_user_id):
                 return account
         return None
@@ -630,6 +876,23 @@ def normalize_scopes(scopes: list[str]) -> list[str]:
         if scope and scope not in cleaned:
             cleaned.append(scope)
     return cleaned
+
+
+def validate_owner_password(password: str) -> None:
+    try:
+        validate_password_length(password)
+    except ValueError as exc:
+        raise DiscordApiError(str(exc), 400) from exc
+
+
+def normalized_panel_timeout(seconds: int) -> int:
+    try:
+        value = int(seconds)
+    except (TypeError, ValueError):
+        return DEFAULT_PANEL_TIMEOUT_SECONDS
+    if value in PANEL_TIMEOUT_OPTIONS:
+        return value
+    return DEFAULT_PANEL_TIMEOUT_SECONDS
 
 
 def resolved_account_scopes(

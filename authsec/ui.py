@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import discord
 
-from .models import MAX_ACCOUNTS_PER_OWNER, OAuthAccount
+from .models import (
+    MAX_ACCOUNTS_PER_OWNER,
+    PANEL_TIMEOUT_OPTIONS,
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    OAuthAccount,
+    OwnerSecuritySettings,
+)
 from .oauth import DiscordApiError, DiscordOAuthClient
 
 
@@ -133,11 +136,19 @@ class GenerateLinkButton(discord.ui.Button):
         self.parent_view = parent
 
     async def callback(self, interaction: discord.Interaction):
-        url = await asyncio.to_thread(
-            self.parent_view.oauth_client.build_authorization_url,
-            self.parent_view.owner_id,
-            self.parent_view.selected_scopes,
-        )
+        try:
+            url = await asyncio.to_thread(
+                self.parent_view.oauth_client.build_authorization_url,
+                self.parent_view.owner_id,
+                self.parent_view.selected_scopes,
+            )
+        except DiscordApiError as exc:
+            await interaction.response.send_message(
+                view=build_error_view(str(exc)),
+                ephemeral=True,
+            )
+            return
+
         scopes = [*self.parent_view.selected_scopes, "identify"]
         await interaction.response.send_message(
             view=GeneratedOAuthLinkView(url, scopes),
@@ -266,6 +277,299 @@ class CreateOAuthButtonModal(discord.ui.Modal, title="OAuth Button"):
         )
 
 
+class PanelUnlockModal(discord.ui.Modal, title="Unlock Panel"):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__()
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.password_input = password_text_input("Password")
+        self.add_item(self.password_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await asyncio.to_thread(
+                self.oauth_client.unlock_owner,
+                self.owner_id,
+                str(self.password_input.value),
+            )
+            note = "Encryption unlocked for this panel session."
+            try:
+                accounts = await asyncio.to_thread(
+                    self.oauth_client.get_accounts,
+                    self.owner_id,
+                    True,
+                )
+            except DiscordApiError as exc:
+                accounts = await asyncio.to_thread(
+                    self.oauth_client.get_accounts,
+                    self.owner_id,
+                    False,
+                )
+                note = f"{note} {exc}"
+            view = PanelView(
+                self.oauth_client,
+                self.owner_id,
+                accounts,
+                can_join_here=bot_has_admin_in_interaction(interaction),
+                note=note,
+            )
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
+class SetupUnlockModal(discord.ui.Modal, title="Unlock Setup"):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__()
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.password_input = password_text_input("Password")
+        self.add_item(self.password_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await asyncio.to_thread(
+                self.oauth_client.unlock_owner,
+                self.owner_id,
+                str(self.password_input.value),
+            )
+            view = SetupScopeView(self.oauth_client, self.owner_id)
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+
+class EncryptionSettingsView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        oauth_client: DiscordOAuthClient,
+        owner_id: int,
+        note: str | None = None,
+    ):
+        super().__init__(timeout=300)
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.settings = oauth_client.get_security_settings(owner_id)
+        enabled = oauth_client.is_encryption_enabled(owner_id)
+
+        buttons: list[discord.ui.Item] = []
+        if enabled:
+            buttons.extend(
+                [
+                    UnlockEncryptionButton(self),
+                    DisableEncryptionButton(self),
+                ]
+            )
+        else:
+            buttons.append(EnableEncryptionButton(self))
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    encryption_settings_text(
+                        oauth_client,
+                        self.owner_id,
+                        self.settings,
+                        note,
+                    )
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(*buttons),
+                discord.ui.ActionRow(PanelTimeoutSelect(self)),
+                accent_color=ACCENT_SUCCESS if enabled else ACCENT_DEFAULT,
+            )
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            view=build_error_view("This encryption menu belongs to someone else."),
+            ephemeral=True,
+        )
+        return False
+
+
+class EnableEncryptionButton(discord.ui.Button):
+    def __init__(self, parent: EncryptionSettingsView):
+        super().__init__(
+            label="Enable Encryption",
+            style=discord.ButtonStyle.success,
+        )
+        self.parent_view = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            EnableEncryptionModal(
+                self.parent_view.oauth_client,
+                self.parent_view.owner_id,
+            )
+        )
+
+
+class UnlockEncryptionButton(discord.ui.Button):
+    def __init__(self, parent: EncryptionSettingsView):
+        super().__init__(
+            label="Unlock",
+            style=discord.ButtonStyle.primary,
+        )
+        self.parent_view = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            UnlockEncryptionModal(
+                self.parent_view.oauth_client,
+                self.parent_view.owner_id,
+            )
+        )
+
+
+class DisableEncryptionButton(discord.ui.Button):
+    def __init__(self, parent: EncryptionSettingsView):
+        super().__init__(
+            label="Disable Encryption",
+            style=discord.ButtonStyle.danger,
+        )
+        self.parent_view = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            DisableEncryptionModal(
+                self.parent_view.oauth_client,
+                self.parent_view.owner_id,
+            )
+        )
+
+
+class PanelTimeoutSelect(discord.ui.Select):
+    def __init__(self, parent: EncryptionSettingsView):
+        self.parent_view = parent
+        current = parent.oauth_client.panel_timeout_seconds(parent.owner_id)
+        super().__init__(
+            placeholder="Panel button timeout",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=format_timeout_label(seconds),
+                    value=str(seconds),
+                    default=seconds == current,
+                )
+                for seconds in PANEL_TIMEOUT_OPTIONS
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        settings = await asyncio.to_thread(
+            self.parent_view.oauth_client.set_panel_timeout,
+            self.parent_view.owner_id,
+            int(self.values[0]),
+        )
+        await interaction.response.edit_message(
+            view=EncryptionSettingsView(
+                self.parent_view.oauth_client,
+                self.parent_view.owner_id,
+                note=f"Panel buttons now time out after {format_timeout_label(settings.panel_timeout_seconds)}.",
+            )
+        )
+
+
+class EnableEncryptionModal(discord.ui.Modal, title="Enable Encryption"):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__()
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.password_input = password_text_input("Password")
+        self.confirm_input = password_text_input("Confirm Password")
+        self.add_item(self.password_input)
+        self.add_item(self.confirm_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        password = str(self.password_input.value)
+        confirm = str(self.confirm_input.value)
+        if password != confirm:
+            await interaction.response.send_message(
+                view=build_error_view("The passwords did not match."),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await asyncio.to_thread(
+                self.oauth_client.enable_encryption,
+                self.owner_id,
+                password,
+            )
+            view = EncryptionSettingsView(
+                self.oauth_client,
+                self.owner_id,
+                note="Encryption enabled. Saved tokens, IP addresses, user agents, and webhook tokens were encrypted.",
+            )
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
+class UnlockEncryptionModal(discord.ui.Modal, title="Unlock Encryption"):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__()
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.password_input = password_text_input("Password")
+        self.add_item(self.password_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await asyncio.to_thread(
+                self.oauth_client.unlock_owner,
+                self.owner_id,
+                str(self.password_input.value),
+            )
+            view = EncryptionSettingsView(
+                self.oauth_client,
+                self.owner_id,
+                note="Encryption unlocked.",
+            )
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
+class DisableEncryptionModal(discord.ui.Modal, title="Disable Encryption"):
+    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
+        super().__init__()
+        self.oauth_client = oauth_client
+        self.owner_id = int(owner_id)
+        self.password_input = password_text_input("Password")
+        self.add_item(self.password_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await asyncio.to_thread(
+                self.oauth_client.disable_encryption,
+                self.owner_id,
+                str(self.password_input.value),
+            )
+            view = EncryptionSettingsView(
+                self.oauth_client,
+                self.owner_id,
+                note="Encryption disabled. Saved sensitive values were decrypted back into the database.",
+            )
+        except DiscordApiError as exc:
+            view = build_error_view(str(exc))
+
+        await interaction.followup.send(view=view, ephemeral=True)
+
+
 class PanelView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -276,7 +580,7 @@ class PanelView(discord.ui.LayoutView):
         note: str | None = None,
         page: int = 0,
     ):
-        super().__init__(timeout=300)
+        super().__init__(timeout=oauth_client.panel_timeout_seconds(owner_id))
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
         self.accounts = accounts
@@ -331,9 +635,6 @@ class PanelView(discord.ui.LayoutView):
                     ),
                 ),
                 DisconnectButton(self, disabled=not has_account),
-            ),
-            discord.ui.ActionRow(
-                ExportAllDataButton(self, disabled=not bool(accounts)),
             ),
         ]
 
@@ -805,109 +1106,6 @@ class CancelJoinServerButton(discord.ui.Button):
         )
 
 
-class ExportAllDataButton(discord.ui.Button):
-    def __init__(self, panel: PanelView, disabled: bool):
-        super().__init__(
-            label="Export all data",
-            style=discord.ButtonStyle.secondary,
-            disabled=disabled,
-        )
-        self.panel = panel
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            view=ExportFormatView(
-                self.panel.oauth_client,
-                self.panel.owner_id,
-            ),
-            ephemeral=True,
-        )
-
-
-class ExportFormatView(discord.ui.LayoutView):
-    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
-        super().__init__(timeout=180)
-        self.oauth_client = oauth_client
-        self.owner_id = int(owner_id)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "## Export all data\n"
-                    "Select an export file type. OAuth access tokens, refresh "
-                    "tokens, and webhook tokens are not included."
-                ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                discord.ui.ActionRow(ExportFormatSelect(self)),
-                accent_color=ACCENT_DEFAULT,
-            )
-        )
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner_id:
-            return True
-
-        await interaction.response.send_message(
-            view=build_error_view("This export menu belongs to someone else."),
-            ephemeral=True,
-        )
-        return False
-
-
-class ExportFormatSelect(discord.ui.Select):
-    def __init__(self, parent: ExportFormatView):
-        self.parent_view = parent
-        super().__init__(
-            placeholder="Choose export file type",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(
-                    label="JSON",
-                    value="json",
-                    description="Structured export for scripts or backups.",
-                ),
-                discord.SelectOption(
-                    label="TXT",
-                    value="txt",
-                    description="Readable plain text export.",
-                ),
-            ],
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        export_format = self.values[0]
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        export_path: Path | None = None
-        discord_file: discord.File | None = None
-        try:
-            export_path, export_filename = await asyncio.to_thread(
-                build_export_file,
-                self.parent_view.oauth_client,
-                self.parent_view.owner_id,
-                export_format,
-            )
-            discord_file = discord.File(str(export_path), filename=export_filename)
-            await interaction.followup.send(
-                view=TextContainerView(
-                    "Export Ready",
-                    "The file contains saved account data and available scoped data.",
-                    ACCENT_SUCCESS,
-                ),
-                file=discord_file,
-                ephemeral=True,
-            )
-        except DiscordApiError as exc:
-            await interaction.followup.send(
-                view=build_error_view(str(exc)),
-                ephemeral=True,
-            )
-        finally:
-            if discord_file is not None:
-                discord_file.close()
-            if export_path is not None:
-                await asyncio.to_thread(delete_export_file, export_path)
-
-
 class DisconnectButton(discord.ui.Button):
     def __init__(self, panel: PanelView, disabled: bool):
         super().__init__(
@@ -1166,234 +1364,6 @@ class RelationshipPageButton(discord.ui.Button):
         )
 
 
-def build_export_file(
-    oauth_client: DiscordOAuthClient,
-    owner_id: int,
-    export_format: str,
-) -> tuple[Path, str]:
-    export_format = export_format.lower().strip()
-    data = build_export_data(oauth_client, owner_id)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    filename = f"authsec-export-{owner_id}-{timestamp}.{export_format}"
-
-    if export_format == "json":
-        content = json.dumps(data, indent=2, ensure_ascii=False)
-    elif export_format == "txt":
-        content = export_data_to_text(data)
-    else:
-        raise DiscordApiError("Unsupported export format.", 400)
-
-    file_descriptor, raw_path = tempfile.mkstemp(
-        prefix=f"authsec-export-{owner_id}-",
-        suffix=f".{export_format}",
-    )
-    with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="") as file:
-        file.write(content)
-
-    return Path(raw_path), filename
-
-
-def delete_export_file(path: Path) -> None:
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def build_export_data(
-    oauth_client: DiscordOAuthClient,
-    owner_id: int,
-) -> dict[str, Any]:
-    accounts = oauth_client.get_accounts(owner_id, False)
-    export: dict[str, Any] = {
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "owner_id": str(owner_id),
-        "account_count": len(accounts),
-        "accounts": [],
-    }
-
-    for account in accounts:
-        account_data: dict[str, Any] = {
-            "stored_account": export_account_metadata(account),
-            "ip_address": account.ip_address,
-            "user_agent": account.user_agent,
-            "webhook": export_webhook_metadata(account),
-            "current_user": None,
-            "servers": [],
-            "server_member_details": {},
-            "connections": [],
-            "relationships": [],
-            "ip_info": None,
-            "errors": [],
-        }
-        account_id = account.account_id
-
-        _export_fetch(
-            account_data,
-            "current_user",
-            lambda: oauth_client.fetch_current_user(owner_id, account_id),
-        )
-        if account.has_scope("guilds"):
-            servers = _export_fetch(
-                account_data,
-                "servers",
-                lambda: oauth_client.fetch_guilds(owner_id, account_id),
-                default=[],
-            )
-            if account.has_scope("guilds.members.read") and servers:
-                guild_ids = [
-                    str(guild.get("id"))
-                    for guild in servers
-                    if isinstance(guild, dict) and guild.get("id")
-                ]
-                _export_fetch(
-                    account_data,
-                    "server_member_details",
-                    lambda: oauth_client.fetch_guild_member_details(
-                        owner_id,
-                        guild_ids,
-                        account_id,
-                    ),
-                    default={},
-                )
-        if account.has_scope("connections"):
-            _export_fetch(
-                account_data,
-                "connections",
-                lambda: oauth_client.fetch_connections(owner_id, account_id),
-                default=[],
-            )
-        if account.has_scope("relationships.read"):
-            _export_fetch(
-                account_data,
-                "relationships",
-                lambda: oauth_client.fetch_relationships(owner_id, account_id),
-                default=[],
-            )
-        if account.ip_address:
-            _export_fetch(
-                account_data,
-                "ip_info",
-                lambda: oauth_client.fetch_ip_info(account.ip_address),
-            )
-
-        export["accounts"].append(sanitize_export_value(account_data))
-
-    return export
-
-
-def _export_fetch(
-    account_data: dict[str, Any],
-    key: str,
-    fetcher,
-    default: Any = None,
-) -> Any:
-    try:
-        value = fetcher()
-    except DiscordApiError as exc:
-        account_data["errors"].append({"section": key, "message": str(exc)})
-        if default is not None:
-            account_data[key] = default
-            return default
-        return None
-
-    value = sanitize_export_value(value)
-    account_data[key] = value
-    return value
-
-
-def export_account_metadata(account: OAuthAccount) -> dict[str, Any]:
-    return {
-        "account_id": account.account_id,
-        "owner_id": str(account.owner_id),
-        "discord_user_id": account.discord_user_id,
-        "username": account.username,
-        "global_name": account.global_name,
-        "display_name": account.display_name,
-        "mfa_enabled": account.mfa_enabled,
-        "scopes": list(account.scopes),
-        "ip_address": account.ip_address,
-        "user_agent": account.user_agent,
-        "created_at": account.created_at,
-        "created_at_formatted": _export_epoch(account.created_at),
-        "updated_at": account.updated_at,
-        "updated_at_formatted": _export_epoch(account.updated_at),
-        "token_expires_at": account.expires_at,
-        "token_expires_at_formatted": _export_epoch(account.expires_at),
-    }
-
-
-def export_webhook_metadata(account: OAuthAccount) -> dict[str, Any]:
-    return {
-        "stored": account.has_webhook,
-        "id": account.webhook_id,
-        "channel_id": account.webhook_channel_id,
-        "guild_id": account.webhook_guild_id,
-        "name": account.webhook_name,
-    }
-
-
-def sanitize_export_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        cleaned = {}
-        for key, item in value.items():
-            key_text = str(key)
-            if is_sensitive_export_key(key_text):
-                continue
-            cleaned[key_text] = sanitize_export_value(item)
-        return cleaned
-    if isinstance(value, list):
-        return [sanitize_export_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [sanitize_export_value(item) for item in value]
-    return value
-
-
-def is_sensitive_export_key(key: str) -> bool:
-    normalized = key.lower()
-    return normalized in {
-        "access_token",
-        "refresh_token",
-        "webhook_token",
-        "token",
-    } or normalized.endswith("_token")
-
-
-def export_data_to_text(data: dict[str, Any]) -> str:
-    return "\n".join(text_export_lines("AuthSec Export", data))
-
-
-def text_export_lines(label: str, value: Any, indent: int = 0) -> list[str]:
-    prefix = "  " * indent
-    lines = [f"{prefix}{label}:"]
-    if isinstance(value, dict):
-        if not value:
-            lines[-1] += " {}"
-            return lines
-        for key, item in value.items():
-            lines.extend(text_export_lines(str(key), item, indent + 1))
-        return lines
-    if isinstance(value, list):
-        if not value:
-            lines[-1] += " []"
-            return lines
-        for index, item in enumerate(value, 1):
-            lines.extend(text_export_lines(f"- {index}", item, indent + 1))
-        return lines
-
-    lines[-1] += f" {value if value is not None else 'None'}"
-    return lines
-
-
-def _export_epoch(value: int | None) -> str | None:
-    if value is None:
-        return None
-    try:
-        return datetime.fromtimestamp(int(value), timezone.utc).isoformat()
-    except (TypeError, ValueError, OSError):
-        return None
-
-
 def oauth_scope_options() -> list[discord.SelectOption]:
     return [
         discord.SelectOption(
@@ -1598,6 +1568,50 @@ def panel_text(
     if note:
         lines.extend(["", f"**Note:** {note}"])
     return "\n".join(lines)
+
+
+def password_text_input(label: str) -> discord.ui.TextInput:
+    return discord.ui.TextInput(
+        label=label,
+        style=discord.TextStyle.short,
+        min_length=PASSWORD_MIN_LENGTH,
+        max_length=PASSWORD_MAX_LENGTH,
+    )
+
+
+def encryption_settings_text(
+    oauth_client: DiscordOAuthClient,
+    owner_id: int,
+    settings: OwnerSecuritySettings,
+    note: str | None = None,
+) -> str:
+    enabled = oauth_client.is_encryption_enabled(owner_id)
+    expires_at = oauth_client.owner_unlock_expires_at(owner_id)
+    if not enabled:
+        status = "Disabled"
+    elif expires_at is not None:
+        status = f"Unlocked until <t:{expires_at}:T>"
+    else:
+        status = "Locked"
+
+    lines = [
+        "## Encryption",
+        f"**Status:** {status}",
+        f"**Panel timeout:** {format_timeout_label(settings.panel_timeout_seconds)}",
+        "",
+        "When enabled, access tokens, refresh tokens, IP addresses, user agents, "
+        "and webhook tokens are encrypted with AES using your password.",
+        f"Passwords must be {PASSWORD_MIN_LENGTH}-{PASSWORD_MAX_LENGTH} characters.",
+    ]
+    if note:
+        lines.extend(["", f"**Note:** {note}"])
+    return "\n".join(lines)
+
+
+def format_timeout_label(seconds: int) -> str:
+    minutes = max(1, int(seconds) // 60)
+    suffix = "minute" if minutes == 1 else "minutes"
+    return f"{minutes} {suffix}"
 
 
 def build_user_view(

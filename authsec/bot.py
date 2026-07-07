@@ -11,9 +11,13 @@ from .oauth import DiscordApiError, DiscordOAuthClient
 from .settings import Settings
 from .ui import (
     CreateOAuthButtonModal,
+    EncryptionSettingsView,
+    PanelUnlockModal,
     PanelView,
     SetupScopeView,
+    SetupUnlockModal,
     bot_has_admin_in_interaction,
+    build_error_view,
     build_faq_view,
     build_linked_dm_view,
     build_ping_view,
@@ -134,6 +138,12 @@ def create_bot(
     @tree.command(name="setup", description="Create a Discord OAuth authorization link.")
     @command_contexts
     async def setup(interaction: discord.Interaction):
+        if oauth_client.owner_requires_unlock(interaction.user.id):
+            await interaction.response.send_modal(
+                SetupUnlockModal(oauth_client, interaction.user.id)
+            )
+            return
+
         await interaction.response.send_message(
             view=SetupScopeView(oauth_client, interaction.user.id),
             ephemeral=True,
@@ -147,6 +157,12 @@ def create_bot(
     @tree.command(name="panel", description="Manage your linked OAuth account.")
     @command_contexts
     async def panel(interaction: discord.Interaction):
+        if oauth_client.owner_requires_unlock(interaction.user.id):
+            await interaction.response.send_modal(
+                PanelUnlockModal(oauth_client, interaction.user.id)
+            )
+            return
+
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         error = None
@@ -157,11 +173,18 @@ def create_bot(
                 True,
             )
         except DiscordApiError as exc:
-            accounts = await asyncio.to_thread(
-                oauth_client.get_accounts,
-                interaction.user.id,
-                False,
-            )
+            try:
+                accounts = await asyncio.to_thread(
+                    oauth_client.get_accounts,
+                    interaction.user.id,
+                    False,
+                )
+            except DiscordApiError:
+                await interaction.followup.send(
+                    view=build_error_view(str(exc)),
+                    ephemeral=True,
+                )
+                return
             error = str(exc)
 
         await interaction.followup.send(
@@ -172,6 +195,14 @@ def create_bot(
                 can_join_here=bot_has_admin_in_interaction(interaction),
                 note=error,
             ),
+            ephemeral=True,
+        )
+
+    @tree.command(name="encryption", description="Manage account data encryption.")
+    @command_contexts
+    async def encryption(interaction: discord.Interaction):
+        await interaction.response.send_message(
+            view=EncryptionSettingsView(oauth_client, interaction.user.id),
             ephemeral=True,
         )
 

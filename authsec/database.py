@@ -6,9 +6,11 @@ from pathlib import Path
 from threading import RLock
 
 from .models import (
+    DEFAULT_PANEL_TIMEOUT_SECONDS,
     MAX_ACCOUNTS_PER_OWNER,
     OAuthAccount,
     OAuthState,
+    OwnerSecuritySettings,
     scopes_from_json,
     scopes_to_json,
 )
@@ -93,6 +95,14 @@ class AuthDatabase:
                     details TEXT,
                     created_at INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS owner_security_settings (
+                    owner_id INTEGER PRIMARY KEY,
+                    password_hash TEXT,
+                    encryption_enabled INTEGER NOT NULL DEFAULT 0,
+                    panel_timeout_seconds INTEGER NOT NULL DEFAULT 300,
+                    updated_at INTEGER NOT NULL
+                );
                 """
             )
             self._ensure_column("oauth_accounts", "mfa_enabled", "INTEGER")
@@ -102,6 +112,22 @@ class AuthDatabase:
             self._ensure_column("oauth_accounts", "webhook_channel_id", "TEXT")
             self._ensure_column("oauth_accounts", "webhook_guild_id", "TEXT")
             self._ensure_column("oauth_accounts", "webhook_name", "TEXT")
+            self._ensure_column("owner_security_settings", "password_hash", "TEXT")
+            self._ensure_column(
+                "owner_security_settings",
+                "encryption_enabled",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                "owner_security_settings",
+                "panel_timeout_seconds",
+                "INTEGER NOT NULL DEFAULT 300",
+            )
+            self._ensure_column(
+                "owner_security_settings",
+                "updated_at",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
             self._migrate_oauth_accounts_primary_key()
             self._connection.execute(
                 """
@@ -186,6 +212,61 @@ class AuthDatabase:
                 "DELETE FROM oauth_states WHERE expires_at < ? OR used_at IS NOT NULL",
                 (_now(),),
             )
+
+    def get_security_settings(self, owner_id: int) -> OwnerSecuritySettings:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT owner_id, password_hash, encryption_enabled,
+                       panel_timeout_seconds, updated_at
+                FROM owner_security_settings
+                WHERE owner_id = ?
+                """,
+                (int(owner_id),),
+            ).fetchone()
+
+        if row is None:
+            return OwnerSecuritySettings(
+                owner_id=int(owner_id),
+                password_hash=None,
+                encryption_enabled=False,
+                panel_timeout_seconds=DEFAULT_PANEL_TIMEOUT_SECONDS,
+                updated_at=0,
+            )
+
+        return _security_settings_from_row(row)
+
+    def save_security_settings(
+        self,
+        settings: OwnerSecuritySettings,
+    ) -> OwnerSecuritySettings:
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO owner_security_settings (
+                    owner_id,
+                    password_hash,
+                    encryption_enabled,
+                    panel_timeout_seconds,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(owner_id) DO UPDATE SET
+                    password_hash = excluded.password_hash,
+                    encryption_enabled = excluded.encryption_enabled,
+                    panel_timeout_seconds = excluded.panel_timeout_seconds,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    int(settings.owner_id),
+                    settings.password_hash,
+                    _bool_to_int(settings.encryption_enabled),
+                    int(settings.panel_timeout_seconds),
+                    int(settings.updated_at),
+                ),
+            )
+
+        return self.get_security_settings(settings.owner_id)
 
     def save_account(self, account: OAuthAccount) -> OAuthAccount:
         with self._lock:
@@ -498,6 +579,17 @@ def _account_from_row(row: sqlite3.Row) -> OAuthAccount:
         webhook_channel_id=row["webhook_channel_id"],
         webhook_guild_id=row["webhook_guild_id"],
         webhook_name=row["webhook_name"],
+    )
+
+
+def _security_settings_from_row(row: sqlite3.Row) -> OwnerSecuritySettings:
+    timeout_seconds = int(row["panel_timeout_seconds"] or DEFAULT_PANEL_TIMEOUT_SECONDS)
+    return OwnerSecuritySettings(
+        owner_id=int(row["owner_id"]),
+        password_hash=row["password_hash"],
+        encryption_enabled=bool(row["encryption_enabled"]),
+        panel_timeout_seconds=timeout_seconds,
+        updated_at=int(row["updated_at"] or 0),
     )
 
 

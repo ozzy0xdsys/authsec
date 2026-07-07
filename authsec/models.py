@@ -6,6 +6,10 @@ from typing import Any
 
 
 MAX_ACCOUNTS_PER_OWNER = 25
+PASSWORD_MIN_LENGTH = 4
+PASSWORD_MAX_LENGTH = 30
+PANEL_TIMEOUT_OPTIONS = [3 * 60, 5 * 60, 10 * 60, 15 * 60, 30 * 60]
+DEFAULT_PANEL_TIMEOUT_SECONDS = 5 * 60
 
 
 @dataclass(frozen=True)
@@ -15,6 +19,15 @@ class OAuthState:
     scopes: list[str]
     created_at: int
     expires_at: int
+
+
+@dataclass(frozen=True)
+class OwnerSecuritySettings:
+    owner_id: int
+    password_hash: str | None
+    encryption_enabled: bool
+    panel_timeout_seconds: int
+    updated_at: int
 
 
 @dataclass(frozen=True)

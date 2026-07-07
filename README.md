@@ -18,8 +18,11 @@ AuthSec is a Discord bot plus a Flask website for Discord OAuth.
   - send messages through the OAuth webhook returned by `webhook.incoming`
   - add the linked account to the current server when `guilds.join` is granted and the bot has administrator in that server
   - warn before a server join that Discord will send the linked account a DM
-  - export saved and scoped account data as JSON or TXT without OAuth tokens
   - disconnect and revoke the token
+- `/encryption` lets a user enable AES encryption for saved access tokens, refresh tokens, IP addresses, user agents, and webhook tokens.
+  - The password is verified with a SHA-256 hash and the raw password is only kept in memory while unlocked.
+  - Encrypted users unlock with a password modal before using `/panel` or `/setup`.
+  - The panel button timeout can be set from 3 to 30 minutes.
 - `/faq` explains the bot behavior.
 - `/ping` confirms the bot is alive.
 
