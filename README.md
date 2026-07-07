@@ -5,6 +5,8 @@ AuthSec is a Discord bot plus a Flask website for Discord OAuth.
 ## What It Does
 
 - `/setup` lets a user choose OAuth scopes and creates a short-lived Discord authorization link.
+  - Authorization links can be one-use, limited-use, or unlimited-use until they expire.
+  - Link expiry can be set from 10 minutes to 24 hours.
   - The generated link response includes a raw copyable URL and a `Post Here` button for posting a public authorization button.
 - `/create` posts a reusable button message for an OAuth link.
 - `/panel` shows the linked account and provides working actions:
@@ -21,8 +23,8 @@ AuthSec is a Discord bot plus a Flask website for Discord OAuth.
   - disconnect and revoke the token
 - `/encryption` lets a user enable AES encryption for saved access tokens, refresh tokens, IP addresses, user agents, and webhook tokens.
   - The password is verified with a SHA-256 hash and the raw password is only kept in memory while unlocked.
-  - Encrypted users unlock with a password modal before using `/panel` or `/setup`.
-  - The panel button timeout can be set from 3 to 30 minutes.
+  - Encrypted users enter the password every time they run `/panel`.
+  - The panel button timeout can be set from 3 to 30 minutes, and the panel shows when its buttons will disable.
 - `/faq` explains the bot behavior.
 - `/ping` confirms the bot is alive.
 

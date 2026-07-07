@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import RLock
 
 from .models import (
+    DEFAULT_OAUTH_LINK_USE_LIMIT,
     DEFAULT_PANEL_TIMEOUT_SECONDS,
     MAX_ACCOUNTS_PER_OWNER,
     OAuthAccount,
@@ -82,7 +83,9 @@ class AuthDatabase:
                     scopes TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
                     expires_at INTEGER NOT NULL,
-                    used_at INTEGER
+                    used_at INTEGER,
+                    use_limit INTEGER DEFAULT 1,
+                    used_count INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_oauth_states_owner
@@ -112,6 +115,24 @@ class AuthDatabase:
             self._ensure_column("oauth_accounts", "webhook_channel_id", "TEXT")
             self._ensure_column("oauth_accounts", "webhook_guild_id", "TEXT")
             self._ensure_column("oauth_accounts", "webhook_name", "TEXT")
+            self._ensure_column(
+                "oauth_states",
+                "use_limit",
+                "INTEGER DEFAULT 1",
+            )
+            self._ensure_column(
+                "oauth_states",
+                "used_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._connection.execute(
+                """
+                UPDATE oauth_states
+                SET used_count = 1
+                WHERE used_at IS NOT NULL
+                  AND used_count = 0
+                """
+            )
             self._ensure_column("owner_security_settings", "password_hash", "TEXT")
             self._ensure_column(
                 "owner_security_settings",
@@ -148,6 +169,7 @@ class AuthDatabase:
         owner_id: int,
         scopes: list[str],
         ttl_seconds: int,
+        use_limit: int | None = DEFAULT_OAUTH_LINK_USE_LIMIT,
     ) -> OAuthState:
         now = _now()
         item = OAuthState(
@@ -156,14 +178,16 @@ class AuthDatabase:
             scopes=scopes,
             created_at=now,
             expires_at=now + int(ttl_seconds),
+            use_limit=use_limit,
+            used_count=0,
         )
 
         with self._lock:
             self._connection.execute(
                 """
                 INSERT INTO oauth_states
-                    (state, owner_id, scopes, created_at, expires_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (state, owner_id, scopes, created_at, expires_at, use_limit, used_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.state,
@@ -171,6 +195,8 @@ class AuthDatabase:
                     scopes_to_json(item.scopes),
                     item.created_at,
                     item.expires_at,
+                    item.use_limit,
+                    item.used_count,
                 ),
             )
 
@@ -181,11 +207,15 @@ class AuthDatabase:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT state, owner_id, scopes, created_at, expires_at
+                SELECT state, owner_id, scopes, created_at, expires_at,
+                       use_limit, used_count
                 FROM oauth_states
                 WHERE state = ?
-                  AND used_at IS NULL
                   AND expires_at >= ?
+                  AND (
+                    use_limit IS NULL
+                    OR used_count < use_limit
+                  )
                 """,
                 (state, now),
             ).fetchone()
@@ -194,22 +224,50 @@ class AuthDatabase:
                 return None
 
             self._connection.execute(
-                "UPDATE oauth_states SET used_at = ? WHERE state = ?",
+                """
+                UPDATE oauth_states
+                SET used_at = ?,
+                    used_count = used_count + 1
+                WHERE state = ?
+                """,
                 (now, state),
             )
 
-        return OAuthState(
-            state=row["state"],
-            owner_id=int(row["owner_id"]),
-            scopes=scopes_from_json(row["scopes"]),
-            created_at=int(row["created_at"]),
-            expires_at=int(row["expires_at"]),
-        )
+        return _state_from_row(row, used_count_offset=1)
+
+    def get_valid_state(self, state: str) -> OAuthState | None:
+        now = _now()
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT state, owner_id, scopes, created_at, expires_at,
+                       use_limit, used_count
+                FROM oauth_states
+                WHERE state = ?
+                  AND expires_at >= ?
+                  AND (
+                    use_limit IS NULL
+                    OR used_count < use_limit
+                  )
+                """,
+                (state, now),
+            ).fetchone()
+
+        if row is None:
+            return None
+        return _state_from_row(row)
 
     def cleanup_states(self) -> None:
         with self._lock:
             self._connection.execute(
-                "DELETE FROM oauth_states WHERE expires_at < ? OR used_at IS NOT NULL",
+                """
+                DELETE FROM oauth_states
+                WHERE expires_at < ?
+                   OR (
+                    use_limit IS NOT NULL
+                    AND used_count >= use_limit
+                  )
+                """,
                 (_now(),),
             )
 
@@ -582,6 +640,18 @@ def _account_from_row(row: sqlite3.Row) -> OAuthAccount:
     )
 
 
+def _state_from_row(row: sqlite3.Row, used_count_offset: int = 0) -> OAuthState:
+    return OAuthState(
+        state=row["state"],
+        owner_id=int(row["owner_id"]),
+        scopes=scopes_from_json(row["scopes"]),
+        created_at=int(row["created_at"]),
+        expires_at=int(row["expires_at"]),
+        use_limit=_optional_int(row["use_limit"]),
+        used_count=int(row["used_count"] or 0) + used_count_offset,
+    )
+
+
 def _security_settings_from_row(row: sqlite3.Row) -> OwnerSecuritySettings:
     timeout_seconds = int(row["panel_timeout_seconds"] or DEFAULT_PANEL_TIMEOUT_SECONDS)
     return OwnerSecuritySettings(
@@ -631,3 +701,9 @@ def _int_to_bool(value: int | None) -> bool | None:
     if value is None:
         return None
     return bool(value)
+
+
+def _optional_int(value: int | None) -> int | None:
+    if value is None:
+        return None
+    return int(value)

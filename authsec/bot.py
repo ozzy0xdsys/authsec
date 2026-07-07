@@ -73,23 +73,31 @@ class BotRuntime:
         self.client = client
         self.loop = asyncio.get_running_loop()
 
-    def notify_linked_account(self, account: OAuthAccount) -> bool:
+    def notify_linked_account(
+        self,
+        account: OAuthAccount,
+        encryption_enabled: bool,
+    ) -> bool:
         if self.client is None or self.loop is None or self.loop.is_closed():
             return False
 
         future = asyncio.run_coroutine_threadsafe(
-            self._send_linked_account_dm(account),
+            self._send_linked_account_dm(account, encryption_enabled),
             self.loop,
         )
         future.add_done_callback(self._log_background_error)
         return True
 
-    async def _send_linked_account_dm(self, account: OAuthAccount) -> None:
+    async def _send_linked_account_dm(
+        self,
+        account: OAuthAccount,
+        encryption_enabled: bool,
+    ) -> None:
         if self.client is None:
             return
 
         user = await self.client.fetch_user(account.owner_id)
-        await user.send(view=build_linked_dm_view(account))
+        await user.send(view=build_linked_dm_view(account, encryption_enabled))
 
     @staticmethod
     def _log_background_error(future: asyncio.Future) -> None:
@@ -157,7 +165,7 @@ def create_bot(
     @tree.command(name="panel", description="Manage your linked OAuth account.")
     @command_contexts
     async def panel(interaction: discord.Interaction):
-        if oauth_client.owner_requires_unlock(interaction.user.id):
+        if oauth_client.is_encryption_enabled(interaction.user.id):
             await interaction.response.send_modal(
                 PanelUnlockModal(oauth_client, interaction.user.id)
             )
@@ -187,16 +195,19 @@ def create_bot(
                 return
             error = str(exc)
 
-        await interaction.followup.send(
-            view=PanelView(
-                oauth_client,
-                interaction.user.id,
-                accounts,
-                can_join_here=bot_has_admin_in_interaction(interaction),
-                note=error,
-            ),
-            ephemeral=True,
+        view = PanelView(
+            oauth_client,
+            interaction.user.id,
+            accounts,
+            can_join_here=bot_has_admin_in_interaction(interaction),
+            note=error,
         )
+        message = await interaction.followup.send(
+            view=view,
+            ephemeral=True,
+            wait=True,
+        )
+        view.bind_message(message)
 
     @tree.command(name="encryption", description="Manage account data encryption.")
     @command_contexts

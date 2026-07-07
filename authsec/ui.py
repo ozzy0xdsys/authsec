@@ -9,7 +9,11 @@ from urllib.parse import urlparse
 import discord
 
 from .models import (
+    DEFAULT_OAUTH_LINK_TTL_SECONDS,
+    DEFAULT_OAUTH_LINK_USE_LIMIT,
     MAX_ACCOUNTS_PER_OWNER,
+    OAUTH_LINK_TTL_OPTIONS,
+    OAUTH_LINK_USE_LIMIT_OPTIONS,
     PANEL_TIMEOUT_OPTIONS,
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
@@ -83,6 +87,8 @@ class SetupScopeView(discord.ui.LayoutView):
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
         self.selected_scopes = list(DEFAULT_SETUP_SCOPES)
+        self.link_ttl_seconds = DEFAULT_OAUTH_LINK_TTL_SECONDS
+        self.link_use_limit = DEFAULT_OAUTH_LINK_USE_LIMIT
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
@@ -91,10 +97,14 @@ class SetupScopeView(discord.ui.LayoutView):
                     "the main panel buttons. `Identify` is always included so the app "
                     "knows which Discord account authorized it. You can store up to "
                     f"{MAX_ACCOUNTS_PER_OWNER} accounts; re-authorizing the same "
-                    "account updates its saved access."
+                    "account updates its saved access.\n\n"
+                    "Choose how long the authorization link works and how many times "
+                    "it can successfully link an account."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.ActionRow(ScopeSelect(self)),
+                discord.ui.ActionRow(LinkDurationSelect(self)),
+                discord.ui.ActionRow(LinkUseLimitSelect(self)),
                 discord.ui.ActionRow(GenerateLinkButton(self)),
                 accent_color=ACCENT_DEFAULT,
             )
@@ -127,6 +137,50 @@ class ScopeSelect(discord.ui.Select):
         await interaction.response.defer()
 
 
+class LinkDurationSelect(discord.ui.Select):
+    def __init__(self, parent: SetupScopeView):
+        self.parent_view = parent
+        super().__init__(
+            placeholder="Authorization link expires after",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=format_oauth_link_ttl_label(seconds),
+                    value=str(seconds),
+                    default=seconds == parent.link_ttl_seconds,
+                )
+                for seconds in OAUTH_LINK_TTL_OPTIONS
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent_view.link_ttl_seconds = int(self.values[0])
+        await interaction.response.defer()
+
+
+class LinkUseLimitSelect(discord.ui.Select):
+    def __init__(self, parent: SetupScopeView):
+        self.parent_view = parent
+        super().__init__(
+            placeholder="Authorization link uses allowed",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=format_oauth_link_use_label(limit),
+                    value=str(limit),
+                    default=limit == parent.link_use_limit,
+                )
+                for limit in OAUTH_LINK_USE_LIMIT_OPTIONS
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent_view.link_use_limit = int(self.values[0])
+        await interaction.response.defer()
+
+
 class GenerateLinkButton(discord.ui.Button):
     def __init__(self, parent: SetupScopeView):
         super().__init__(
@@ -141,6 +195,8 @@ class GenerateLinkButton(discord.ui.Button):
                 self.parent_view.oauth_client.build_authorization_url,
                 self.parent_view.owner_id,
                 self.parent_view.selected_scopes,
+                self.parent_view.link_ttl_seconds,
+                self.parent_view.link_use_limit,
             )
         except DiscordApiError as exc:
             await interaction.response.send_message(
@@ -151,22 +207,37 @@ class GenerateLinkButton(discord.ui.Button):
 
         scopes = [*self.parent_view.selected_scopes, "identify"]
         await interaction.response.send_message(
-            view=GeneratedOAuthLinkView(url, scopes),
+            view=GeneratedOAuthLinkView(
+                url,
+                scopes,
+                self.parent_view.link_ttl_seconds,
+                self.parent_view.link_use_limit,
+            ),
             ephemeral=True,
         )
 
 
 class GeneratedOAuthLinkView(discord.ui.LayoutView):
-    def __init__(self, url: str, scopes: list[str]):
+    def __init__(
+        self,
+        url: str,
+        scopes: list[str],
+        ttl_seconds: int,
+        use_limit: int,
+    ):
         super().__init__(timeout=None)
         self.url = url
         self.scopes = scopes
+        self.ttl_seconds = int(ttl_seconds)
+        self.use_limit = int(use_limit)
+        expires_at = int(time.time()) + self.ttl_seconds
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "## Authorization Link Ready\n"
-                    "Open this link to authorize the selected access. The link "
-                    "expires in a few minutes and can only be used once.\n\n"
+                    "Open this link to authorize the selected access.\n\n"
+                    f"**Expires:** <t:{expires_at}:R>\n"
+                    f"**Uses:** {format_oauth_link_use_label(self.use_limit)}\n"
                     f"**Access:** {format_scope_list(scopes)}\n\n"
                     f"`{url}`"
                 ),
@@ -317,7 +388,13 @@ class PanelUnlockModal(discord.ui.Modal, title="Unlock Panel"):
         except DiscordApiError as exc:
             view = build_error_view(str(exc))
 
-        await interaction.followup.send(view=view, ephemeral=True)
+        message = await interaction.followup.send(
+            view=view,
+            ephemeral=True,
+            wait=True,
+        )
+        if isinstance(view, PanelView):
+            view.bind_message(message)
 
 
 class SetupUnlockModal(discord.ui.Modal, title="Unlock Setup"):
@@ -357,12 +434,7 @@ class EncryptionSettingsView(discord.ui.LayoutView):
 
         buttons: list[discord.ui.Item] = []
         if enabled:
-            buttons.extend(
-                [
-                    UnlockEncryptionButton(self),
-                    DisableEncryptionButton(self),
-                ]
-            )
+            buttons.append(DisableEncryptionButton(self))
         else:
             buttons.append(EnableEncryptionButton(self))
 
@@ -411,23 +483,6 @@ class EnableEncryptionButton(discord.ui.Button):
         )
 
 
-class UnlockEncryptionButton(discord.ui.Button):
-    def __init__(self, parent: EncryptionSettingsView):
-        super().__init__(
-            label="Unlock",
-            style=discord.ButtonStyle.primary,
-        )
-        self.parent_view = parent
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            UnlockEncryptionModal(
-                self.parent_view.oauth_client,
-                self.parent_view.owner_id,
-            )
-        )
-
-
 class DisableEncryptionButton(discord.ui.Button):
     def __init__(self, parent: EncryptionSettingsView):
         super().__init__(
@@ -450,13 +505,14 @@ class PanelTimeoutSelect(discord.ui.Select):
         self.parent_view = parent
         current = parent.oauth_client.panel_timeout_seconds(parent.owner_id)
         super().__init__(
-            placeholder="Panel button timeout",
+            placeholder="Panel buttons disable after",
             min_values=1,
             max_values=1,
             options=[
                 discord.SelectOption(
                     label=format_timeout_label(seconds),
                     value=str(seconds),
+                    description="How long an unlocked /panel message stays clickable.",
                     default=seconds == current,
                 )
                 for seconds in PANEL_TIMEOUT_OPTIONS
@@ -516,33 +572,6 @@ class EnableEncryptionModal(discord.ui.Modal, title="Enable Encryption"):
         await interaction.followup.send(view=view, ephemeral=True)
 
 
-class UnlockEncryptionModal(discord.ui.Modal, title="Unlock Encryption"):
-    def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
-        super().__init__()
-        self.oauth_client = oauth_client
-        self.owner_id = int(owner_id)
-        self.password_input = password_text_input("Password")
-        self.add_item(self.password_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            await asyncio.to_thread(
-                self.oauth_client.unlock_owner,
-                self.owner_id,
-                str(self.password_input.value),
-            )
-            view = EncryptionSettingsView(
-                self.oauth_client,
-                self.owner_id,
-                note="Encryption unlocked.",
-            )
-        except DiscordApiError as exc:
-            view = build_error_view(str(exc))
-
-        await interaction.followup.send(view=view, ephemeral=True)
-
-
 class DisableEncryptionModal(discord.ui.Modal, title="Disable Encryption"):
     def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
         super().__init__()
@@ -579,8 +608,12 @@ class PanelView(discord.ui.LayoutView):
         can_join_here: bool,
         note: str | None = None,
         page: int = 0,
+        expires_at: int | None = None,
     ):
-        super().__init__(timeout=oauth_client.panel_timeout_seconds(owner_id))
+        timeout_seconds = oauth_client.panel_timeout_seconds(owner_id)
+        self.expires_at = expires_at or int(time.time()) + timeout_seconds
+        remaining_seconds = max(1, self.expires_at - int(time.time()))
+        super().__init__(timeout=remaining_seconds)
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
         self.accounts = accounts
@@ -588,6 +621,7 @@ class PanelView(discord.ui.LayoutView):
         self.account = accounts[self.page] if accounts else None
         self.account_id = self.account.account_id if self.account else None
         self.can_join_here = can_join_here
+        self.message: Any = None
         has_account = self.account is not None
 
         self.add_item(account_switcher_container(self))
@@ -597,6 +631,8 @@ class PanelView(discord.ui.LayoutView):
                 panel_text(
                     self.account,
                     note,
+                    self.expires_at,
+                    timeout_seconds,
                 )
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
@@ -647,6 +683,10 @@ class PanelView(discord.ui.LayoutView):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.owner_id:
+            if self.is_expired:
+                self.disable_interactive_items()
+                await interaction.response.edit_message(view=self)
+                return False
             return True
 
         await interaction.response.send_message(
@@ -654,6 +694,27 @@ class PanelView(discord.ui.LayoutView):
             ephemeral=True,
         )
         return False
+
+    @property
+    def is_expired(self) -> bool:
+        return int(time.time()) >= self.expires_at
+
+    def bind_message(self, message: Any) -> None:
+        self.message = message
+
+    def disable_interactive_items(self) -> None:
+        for item in self.walk_children():
+            if hasattr(item, "disabled"):
+                item.disabled = True
+
+    async def on_timeout(self) -> None:
+        self.disable_interactive_items()
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(view=self)
+        except discord.HTTPException:
+            pass
 
 
 class AccountSwitchButton(discord.ui.Button):
@@ -671,15 +732,19 @@ class AccountSwitchButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
-            view=PanelView(
-                self.panel.oauth_client,
-                self.panel.owner_id,
-                self.panel.accounts,
-                can_join_here=bot_has_admin_in_interaction(interaction),
-                page=self.page,
-            )
+        view = PanelView(
+            self.panel.oauth_client,
+            self.panel.owner_id,
+            self.panel.accounts,
+            can_join_here=bot_has_admin_in_interaction(interaction),
+            page=self.page,
+            expires_at=self.panel.expires_at,
         )
+        view.bind_message(self.panel.message)
+        await interaction.response.edit_message(
+            view=view
+        )
+        self.panel.stop()
 
 
 class AccountSelect(discord.ui.Select):
@@ -701,19 +766,23 @@ class AccountSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
-            view=PanelView(
-                self.panel.oauth_client,
-                self.panel.owner_id,
+        view = PanelView(
+            self.panel.oauth_client,
+            self.panel.owner_id,
+            self.panel.accounts,
+            can_join_here=bot_has_admin_in_interaction(interaction),
+            page=panel_page_for_value(
                 self.panel.accounts,
-                can_join_here=bot_has_admin_in_interaction(interaction),
-                page=panel_page_for_value(
-                    self.panel.accounts,
-                    self.values[0],
-                    self.panel.page,
-                ),
-            )
+                self.values[0],
+                self.panel.page,
+            ),
+            expires_at=self.panel.expires_at,
         )
+        view.bind_message(self.panel.message)
+        await interaction.response.edit_message(
+            view=view
+        )
+        self.panel.stop()
 
 
 class RefreshButton(discord.ui.Button):
@@ -745,16 +814,20 @@ class RefreshButton(discord.ui.Button):
             self.panel.owner_id,
             False,
         )
-        await interaction.edit_original_response(
-            view=PanelView(
-                self.panel.oauth_client,
-                self.panel.owner_id,
-                accounts,
-                can_join_here=bot_has_admin_in_interaction(interaction),
-                note=note,
-                page=panel_page_for_account(accounts, account_id, self.panel.page),
-            )
+        view = PanelView(
+            self.panel.oauth_client,
+            self.panel.owner_id,
+            accounts,
+            can_join_here=bot_has_admin_in_interaction(interaction),
+            note=note,
+            page=panel_page_for_account(accounts, account_id, self.panel.page),
+            expires_at=self.panel.expires_at,
         )
+        message = await interaction.edit_original_response(
+            view=view
+        )
+        view.bind_message(message)
+        self.panel.stop()
 
 
 class DetailsButton(discord.ui.Button):
@@ -1129,16 +1202,18 @@ class DisconnectButton(discord.ui.Button):
             False,
         )
         note = "Disconnected and revoked with Discord." if revoked else "Disconnected locally."
-        await interaction.edit_original_response(
-            view=PanelView(
-                self.panel.oauth_client,
-                self.panel.owner_id,
-                accounts,
-                can_join_here=bot_has_admin_in_interaction(interaction),
-                note=note,
-                page=panel_page_index(accounts, self.panel.page),
-            )
+        view = PanelView(
+            self.panel.oauth_client,
+            self.panel.owner_id,
+            accounts,
+            can_join_here=bot_has_admin_in_interaction(interaction),
+            note=note,
+            page=panel_page_index(accounts, self.panel.page),
+            expires_at=self.panel.expires_at,
         )
+        message = await interaction.edit_original_response(view=view)
+        view.bind_message(message)
+        self.panel.stop()
 
 
 class GuildsPageView(discord.ui.LayoutView):
@@ -1539,13 +1614,17 @@ def panel_page_for_account(
 def panel_text(
     account: OAuthAccount | None,
     note: str | None = None,
+    expires_at: int | None = None,
+    timeout_seconds: int | None = None,
 ) -> str:
+    timeout_lines = panel_timeout_lines(expires_at, timeout_seconds)
     if account is None:
         lines = [
             "## AuthSec Panel",
             "No OAuth account is linked yet. Run `/setup` to create an authorization link. "
             f"You can store up to {MAX_ACCOUNTS_PER_OWNER} accounts.",
         ]
+        lines.extend(timeout_lines)
         if note:
             lines.extend(["", f"**Note:** {note}"])
         return "\n".join(lines)
@@ -1554,6 +1633,8 @@ def panel_text(
         "## AuthSec Panel",
         "Manage the OAuth account linked to your Discord user. Unavailable actions "
         "stay disabled until the matching access is authorized.",
+        "",
+        *timeout_lines,
         "",
         f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
         f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
@@ -1579,6 +1660,24 @@ def password_text_input(label: str) -> discord.ui.TextInput:
     )
 
 
+def panel_timeout_lines(
+    expires_at: int | None,
+    timeout_seconds: int | None,
+) -> list[str]:
+    if expires_at is None or timeout_seconds is None:
+        return []
+
+    if int(time.time()) >= int(expires_at):
+        countdown = "Expired"
+    else:
+        countdown = f"<t:{int(expires_at)}:R>"
+
+    return [
+        f"**Panel button timeout setting:** {format_timeout_label(timeout_seconds)}",
+        f"**Panel buttons disable:** {countdown} (<t:{int(expires_at)}:T>)",
+    ]
+
+
 def encryption_settings_text(
     oauth_client: DiscordOAuthClient,
     owner_id: int,
@@ -1586,21 +1685,20 @@ def encryption_settings_text(
     note: str | None = None,
 ) -> str:
     enabled = oauth_client.is_encryption_enabled(owner_id)
-    expires_at = oauth_client.owner_unlock_expires_at(owner_id)
-    if not enabled:
-        status = "Disabled"
-    elif expires_at is not None:
-        status = f"Unlocked until <t:{expires_at}:T>"
-    else:
-        status = "Locked"
+    status = "Enabled" if enabled else "Disabled"
 
     lines = [
         "## Encryption",
         f"**Status:** {status}",
-        f"**Panel timeout:** {format_timeout_label(settings.panel_timeout_seconds)}",
+        "**Encryption method:** AES-GCM for saved sensitive fields",
+        "**Password check:** SHA-256 hash",
+        f"**Panel buttons disable after:** {format_timeout_label(settings.panel_timeout_seconds)}",
         "",
-        "When enabled, access tokens, refresh tokens, IP addresses, user agents, "
-        "and webhook tokens are encrypted with AES using your password.",
+        "When enabled, `/panel` asks for the password every time it is opened. "
+        "The opened panel stays clickable only for the timeout above.",
+        "",
+        "Saved access tokens, refresh tokens, IP addresses, user agents, and "
+        "webhook tokens are encrypted with the raw password.",
         f"Passwords must be {PASSWORD_MIN_LENGTH}-{PASSWORD_MAX_LENGTH} characters.",
     ]
     if note:
@@ -1612,6 +1710,24 @@ def format_timeout_label(seconds: int) -> str:
     minutes = max(1, int(seconds) // 60)
     suffix = "minute" if minutes == 1 else "minutes"
     return f"{minutes} {suffix}"
+
+
+def format_oauth_link_ttl_label(seconds: int) -> str:
+    seconds = int(seconds)
+    if seconds < 60 * 60:
+        minutes = max(1, seconds // 60)
+        return f"{minutes} minutes"
+    hours = seconds // (60 * 60)
+    suffix = "hour" if hours == 1 else "hours"
+    return f"{hours} {suffix}"
+
+
+def format_oauth_link_use_label(use_limit: int | None) -> str:
+    if use_limit in (None, 0):
+        return "Unlimited uses until expiry"
+    use_limit = int(use_limit)
+    suffix = "use" if use_limit == 1 else "uses"
+    return f"{use_limit} {suffix}"
 
 
 def build_user_view(
@@ -2021,8 +2137,11 @@ def webhook_status_text(account: OAuthAccount) -> str:
 
 def format_user_agent(value: str | None) -> str:
     if not value:
-        return "unknown"
-    return discord.utils.escape_markdown(safe_discord_text(truncate_label(value, 300)))
+        return "`unknown`"
+    text = discord.utils.escape_markdown(
+        safe_discord_text(truncate_label(value, 300))
+    )
+    return f"`{text}`"
 
 
 def safe_optional_text(value: Any, max_length: int = 120) -> str | None:
@@ -2133,21 +2252,36 @@ def build_error_view(message: str) -> discord.ui.LayoutView:
     return TextContainerView("Something went wrong", message, ACCENT_ERROR)
 
 
-def build_linked_dm_view(account: OAuthAccount) -> discord.ui.LayoutView:
+def build_linked_dm_view(
+    account: OAuthAccount,
+    encryption_enabled: bool = True,
+) -> discord.ui.LayoutView:
+    lines = [
+        "Use `/panel` to view, refresh, or disconnect this account.",
+    ]
+    if not encryption_enabled:
+        lines.extend(
+            [
+                "",
+                "**Warning:** Encryption is disabled. This account's access token, "
+                "refresh token, IP address, user agent, and webhook token are stored "
+                "unencrypted in SQLite. Run `/encryption` to enable encryption.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
+            f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
+            f"**IP Address:** `{account.ip_address or 'unknown'}`",
+            f"**User Agent:** {format_user_agent(account.user_agent)}",
+            f"**Access:** {format_scope_list(account.scopes)}",
+            f"**Linked:** <t:{int(time.time())}:R>",
+        ]
+    )
     return TextContainerView(
         "OAuth account linked",
-        "\n".join(
-            [
-                "Use `/panel` to view, refresh, or disconnect this account.",
-                "",
-                f"**Linked account:** {account.display_name} (`{account.discord_user_id}`)",
-                f"**MFA enabled:** {format_optional_bool(account.mfa_enabled)}",
-                f"**IP Address:** `{account.ip_address or 'unknown'}`",
-                f"**User Agent:** {format_user_agent(account.user_agent)}",
-                f"**Access:** {format_scope_list(account.scopes)}",
-                f"**Linked:** <t:{int(time.time())}:R>",
-            ]
-        ),
+        "\n".join(lines),
         ACCENT_SUCCESS,
     )
 

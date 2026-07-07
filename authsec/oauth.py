@@ -17,7 +17,11 @@ from .encryption import (
     validate_password_length,
 )
 from .models import (
+    DEFAULT_OAUTH_LINK_TTL_SECONDS,
+    DEFAULT_OAUTH_LINK_USE_LIMIT,
     DEFAULT_PANEL_TIMEOUT_SECONDS,
+    OAUTH_LINK_TTL_OPTIONS,
+    OAUTH_LINK_USE_LIMIT_OPTIONS,
     PANEL_TIMEOUT_OPTIONS,
     OAuthAccount,
     OwnerSecuritySettings,
@@ -179,16 +183,25 @@ class DiscordOAuthClient:
         with self._unlock_lock:
             self._owner_unlocks.pop(int(owner_id), None)
 
-    def build_authorization_url(self, owner_id: int, scopes: list[str]) -> str:
+    def build_authorization_url(
+        self,
+        owner_id: int,
+        scopes: list[str],
+        ttl_seconds: int | None = None,
+        use_limit: int | None = DEFAULT_OAUTH_LINK_USE_LIMIT,
+    ) -> str:
         self._require_encryption_ready(owner_id)
         clean_scopes = normalize_scopes(scopes)
+        ttl_seconds = normalized_oauth_link_ttl(ttl_seconds)
+        use_limit = normalized_oauth_link_use_limit(use_limit)
         state = secrets.token_urlsafe(32)
         self.database.cleanup_states()
         self.database.save_state(
             state=state,
             owner_id=int(owner_id),
             scopes=clean_scopes,
-            ttl_seconds=self.settings.oauth.state_ttl_seconds,
+            ttl_seconds=ttl_seconds,
+            use_limit=use_limit,
         )
 
         params = {
@@ -207,10 +220,13 @@ class DiscordOAuthClient:
         ip_address: str | None,
         user_agent: str | None,
     ) -> OAuthAccount:
-        saved_state = self.database.consume_state(state)
+        saved_state = self.database.get_valid_state(state)
         if saved_state is None:
             raise DiscordApiError("This authorization link expired or was already used.", 400)
         self._require_encryption_ready(saved_state.owner_id)
+        saved_state = self.database.consume_state(state)
+        if saved_state is None:
+            raise DiscordApiError("This authorization link expired or was already used.", 400)
 
         token = self._exchange_code(code)
         access_token = _required(token, "access_token")
@@ -893,6 +909,30 @@ def normalized_panel_timeout(seconds: int) -> int:
     if value in PANEL_TIMEOUT_OPTIONS:
         return value
     return DEFAULT_PANEL_TIMEOUT_SECONDS
+
+
+def normalized_oauth_link_ttl(seconds: int | None) -> int:
+    try:
+        value = int(seconds) if seconds is not None else DEFAULT_OAUTH_LINK_TTL_SECONDS
+    except (TypeError, ValueError):
+        return DEFAULT_OAUTH_LINK_TTL_SECONDS
+    if value in OAUTH_LINK_TTL_OPTIONS:
+        return value
+    return DEFAULT_OAUTH_LINK_TTL_SECONDS
+
+
+def normalized_oauth_link_use_limit(value: int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_OAUTH_LINK_USE_LIMIT
+    if limit == 0:
+        return None
+    if limit in OAUTH_LINK_USE_LIMIT_OPTIONS:
+        return limit
+    return DEFAULT_OAUTH_LINK_USE_LIMIT
 
 
 def resolved_account_scopes(
