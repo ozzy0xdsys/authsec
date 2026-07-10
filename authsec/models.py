@@ -25,6 +25,20 @@ class OAuthState:
     expires_at: int
     use_limit: int | None = DEFAULT_OAUTH_LINK_USE_LIMIT
     used_count: int = 0
+    purpose: str = "oauth"
+    target_user_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AccessControl:
+    user_id: str
+    blocked: bool
+    force_ip_required: bool
+    force_state: str | None
+    verified_ip: str | None
+    verified_at: int | None
+    created_at: int
+    updated_at: int
 
 
 @dataclass(frozen=True)

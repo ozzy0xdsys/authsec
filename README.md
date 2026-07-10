@@ -27,9 +27,13 @@ AuthSec is a Discord bot plus a Flask website for Discord OAuth.
   - The panel button timeout can be set from 3 to 30 minutes, and the panel shows when its buttons will disable.
 - `/faq` explains the bot behavior.
 - `/ping` confirms the bot is alive.
+- Owner-only text commands for user access control:
+  - `?forceip <userid>` requires the user to complete an OAuth access check and stores the callback IP.
+  - `?block <userid>` blocks a user from using the bot.
+  - `?unblock <userid>` removes the block.
 
 The Discord command UI uses Discord components v2 (`LayoutView`, containers, text displays, and action rows).
-The bot uses slash commands only, so the privileged Message Content intent is not required.
+The owner-only `?` commands require the Discord Message Content intent to be enabled for the bot.
 
 ## Files
 

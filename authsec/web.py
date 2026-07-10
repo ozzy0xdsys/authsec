@@ -45,10 +45,11 @@ def create_web_app(oauth_client: DiscordOAuthClient, bot_runtime: BotRuntime) ->
         except DiscordApiError as exc:
             return _page("Authorization failed", str(exc), exc.status_code)
 
-        bot_runtime.notify_linked_account(
-            account,
-            encryption_enabled=oauth_client.is_encryption_enabled(account.owner_id),
-        )
+        if account is not None:
+            bot_runtime.notify_linked_account(
+                account,
+                encryption_enabled=oauth_client.is_encryption_enabled(account.owner_id),
+            )
         return _close_tab_page()
 
     return app

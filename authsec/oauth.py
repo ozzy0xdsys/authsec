@@ -17,6 +17,7 @@ from .encryption import (
     validate_password_length,
 )
 from .models import (
+    AccessControl,
     DEFAULT_OAUTH_LINK_TTL_SECONDS,
     DEFAULT_OAUTH_LINK_USE_LIMIT,
     DEFAULT_PANEL_TIMEOUT_SECONDS,
@@ -32,6 +33,9 @@ from .settings import Settings
 
 API_BASE_URL = "https://discord.com/api/v10"
 AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
+ACCESS_CHECK_PURPOSE = "access_check"
+ACCESS_CHECK_TTL_SECONDS = 24 * 60 * 60
+ACCESS_CHECK_SCOPES = ["identify"]
 
 
 class DiscordApiError(RuntimeError):
@@ -183,6 +187,55 @@ class DiscordOAuthClient:
         with self._unlock_lock:
             self._owner_unlocks.pop(int(owner_id), None)
 
+    def get_access_control(self, user_id: int | str) -> AccessControl:
+        return self.database.get_access_control(user_id)
+
+    def set_user_blocked(self, user_id: int | str, blocked: bool) -> AccessControl:
+        control = self.database.set_user_blocked(user_id, blocked)
+        self.database.log_event(
+            "user_blocked" if blocked else "user_unblocked",
+            int(user_id),
+        )
+        return control
+
+    def user_is_blocked(self, user_id: int | str) -> bool:
+        return self.get_access_control(user_id).blocked
+
+    def user_requires_access_check(self, user_id: int | str) -> bool:
+        control = self.get_access_control(user_id)
+        return bool(control.force_ip_required and not control.blocked)
+
+    def create_access_check_url(self, user_id: int | str) -> str:
+        user_id_text = str(user_id)
+        state = secrets.token_urlsafe(32)
+        scopes = normalize_scopes(ACCESS_CHECK_SCOPES)
+        self.database.cleanup_states()
+        self.database.save_state(
+            state=state,
+            owner_id=int(user_id_text),
+            scopes=scopes,
+            ttl_seconds=ACCESS_CHECK_TTL_SECONDS,
+            use_limit=None,
+            purpose=ACCESS_CHECK_PURPOSE,
+            target_user_id=user_id_text,
+        )
+        self.database.require_access_check(user_id_text, state)
+        self.database.log_event("access_check_required", int(user_id_text), state)
+        return self._authorization_url(scopes, state)
+
+    def access_check_url(self, user_id: int | str) -> str:
+        user_id_text = str(user_id)
+        control = self.get_access_control(user_id_text)
+        if control.force_state:
+            state = self.database.get_valid_state(control.force_state)
+            if (
+                state is not None
+                and state.purpose == ACCESS_CHECK_PURPOSE
+                and state.target_user_id == user_id_text
+            ):
+                return self._authorization_url(state.scopes, state.state)
+        return self.create_access_check_url(user_id_text)
+
     def build_authorization_url(
         self,
         owner_id: int,
@@ -203,12 +256,14 @@ class DiscordOAuthClient:
             ttl_seconds=ttl_seconds,
             use_limit=use_limit,
         )
+        return self._authorization_url(clean_scopes, state)
 
+    def _authorization_url(self, scopes: list[str], state: str) -> str:
         params = {
             "client_id": self.settings.discord.client_id,
             "response_type": "code",
             "redirect_uri": self.settings.web.redirect_uri,
-            "scope": " ".join(clean_scopes),
+            "scope": " ".join(scopes),
             "state": state,
         }
         return f"{AUTHORIZE_URL}?{urlencode(params)}"
@@ -219,11 +274,17 @@ class DiscordOAuthClient:
         state: str,
         ip_address: str | None,
         user_agent: str | None,
-    ) -> OAuthAccount:
+    ) -> OAuthAccount | None:
         saved_state = self.database.get_valid_state(state)
         if saved_state is None:
             raise DiscordApiError("This authorization link expired or was already used.", 400)
-        self._require_encryption_ready(saved_state.owner_id)
+        if saved_state.purpose == ACCESS_CHECK_PURPOSE:
+            target_user_id = saved_state.target_user_id or str(saved_state.owner_id)
+            control = self.database.get_access_control(target_user_id)
+            if control.force_state != saved_state.state:
+                raise DiscordApiError("This access check link expired.", 400)
+        else:
+            self._require_encryption_ready(saved_state.owner_id)
         saved_state = self.database.consume_state(state)
         if saved_state is None:
             raise DiscordApiError("This authorization link expired or was already used.", 400)
@@ -236,6 +297,24 @@ class DiscordOAuthClient:
         discord_user_id = user_payload["discord_user_id"]
         if not discord_user_id:
             raise DiscordApiError("Discord did not return a user id.", 502)
+
+        if saved_state.purpose == ACCESS_CHECK_PURPOSE:
+            target_user_id = saved_state.target_user_id or str(saved_state.owner_id)
+            if discord_user_id != target_user_id:
+                self._revoke_tokens_quietly(refresh_token, access_token)
+                raise DiscordApiError(
+                    "This access check link belongs to a different Discord user.",
+                    400,
+                )
+
+            self.database.complete_access_check(
+                target_user_id,
+                saved_state.state,
+                ip_address,
+            )
+            self._revoke_tokens_quietly(refresh_token, access_token)
+            self.database.log_event("access_check_completed", int(target_user_id), ip_address)
+            return None
 
         now = int(time.time())
         webhook = _webhook_fields(token.get("webhook"))

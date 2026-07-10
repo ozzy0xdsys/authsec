@@ -81,6 +81,51 @@ class TextContainerView(discord.ui.LayoutView):
         )
 
 
+class AccessRequiredView(discord.ui.LayoutView):
+    def __init__(self, url: str):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "## Access check required\n"
+                    "You can't use this bot until you complete the access check."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.ActionRow(
+                    discord.ui.Button(
+                        label="Gain access",
+                        style=discord.ButtonStyle.link,
+                        url=url,
+                    )
+                ),
+                accent_color=ACCENT_ERROR,
+            )
+        )
+
+
+def build_admin_access_check_view(user_id: int | str, url: str) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay(
+                "## Access check created\n"
+                f"User: <@{user_id}> (`{user_id}`)\n\n"
+                f"`{url}`"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.ActionRow(
+                discord.ui.Button(
+                    label="Gain access",
+                    style=discord.ButtonStyle.link,
+                    url=url,
+                )
+            ),
+            accent_color=ACCENT_DEFAULT,
+        )
+    )
+    return view
+
+
 class SetupScopeView(discord.ui.LayoutView):
     def __init__(self, oauth_client: DiscordOAuthClient, owner_id: int):
         super().__init__(timeout=300)
@@ -2252,6 +2297,14 @@ def build_error_view(message: str) -> discord.ui.LayoutView:
     return TextContainerView("Something went wrong", message, ACCENT_ERROR)
 
 
+def build_blocked_view() -> discord.ui.LayoutView:
+    return TextContainerView(
+        "Access blocked",
+        "You can't use this bot.",
+        ACCENT_ERROR,
+    )
+
+
 def build_linked_dm_view(
     account: OAuthAccount,
     encryption_enabled: bool = True,
@@ -2265,7 +2318,7 @@ def build_linked_dm_view(
                 "",
                 "**Warning:** Encryption is disabled. This account's access token, "
                 "refresh token, IP address, user agent, and webhook token are stored "
-                "unencrypted in SQLite. Run `/encryption` to enable encryption.",
+                "unencrypted. Run `/encryption` to enable encryption.",
             ]
         )
     lines.extend(

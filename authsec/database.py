@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import RLock
 
 from .models import (
+    AccessControl,
     DEFAULT_OAUTH_LINK_USE_LIMIT,
     DEFAULT_PANEL_TIMEOUT_SECONDS,
     MAX_ACCOUNTS_PER_OWNER,
@@ -85,7 +86,9 @@ class AuthDatabase:
                     expires_at INTEGER NOT NULL,
                     used_at INTEGER,
                     use_limit INTEGER DEFAULT 1,
-                    used_count INTEGER NOT NULL DEFAULT 0
+                    used_count INTEGER NOT NULL DEFAULT 0,
+                    purpose TEXT NOT NULL DEFAULT 'oauth',
+                    target_user_id TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_oauth_states_owner
@@ -104,6 +107,17 @@ class AuthDatabase:
                     password_hash TEXT,
                     encryption_enabled INTEGER NOT NULL DEFAULT 0,
                     panel_timeout_seconds INTEGER NOT NULL DEFAULT 300,
+                    updated_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS access_controls (
+                    user_id TEXT PRIMARY KEY,
+                    blocked INTEGER NOT NULL DEFAULT 0,
+                    force_ip_required INTEGER NOT NULL DEFAULT 0,
+                    force_state TEXT,
+                    verified_ip TEXT,
+                    verified_at INTEGER,
+                    created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL
                 );
                 """
@@ -125,6 +139,12 @@ class AuthDatabase:
                 "used_count",
                 "INTEGER NOT NULL DEFAULT 0",
             )
+            self._ensure_column(
+                "oauth_states",
+                "purpose",
+                "TEXT NOT NULL DEFAULT 'oauth'",
+            )
+            self._ensure_column("oauth_states", "target_user_id", "TEXT")
             self._connection.execute(
                 """
                 UPDATE oauth_states
@@ -149,6 +169,29 @@ class AuthDatabase:
                 "updated_at",
                 "INTEGER NOT NULL DEFAULT 0",
             )
+            self._ensure_column(
+                "access_controls",
+                "blocked",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                "access_controls",
+                "force_ip_required",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column("access_controls", "force_state", "TEXT")
+            self._ensure_column("access_controls", "verified_ip", "TEXT")
+            self._ensure_column("access_controls", "verified_at", "INTEGER")
+            self._ensure_column(
+                "access_controls",
+                "created_at",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                "access_controls",
+                "updated_at",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
             self._migrate_oauth_accounts_primary_key()
             self._connection.execute(
                 """
@@ -170,6 +213,8 @@ class AuthDatabase:
         scopes: list[str],
         ttl_seconds: int,
         use_limit: int | None = DEFAULT_OAUTH_LINK_USE_LIMIT,
+        purpose: str = "oauth",
+        target_user_id: str | None = None,
     ) -> OAuthState:
         now = _now()
         item = OAuthState(
@@ -180,14 +225,26 @@ class AuthDatabase:
             expires_at=now + int(ttl_seconds),
             use_limit=use_limit,
             used_count=0,
+            purpose=purpose,
+            target_user_id=target_user_id,
         )
 
         with self._lock:
             self._connection.execute(
                 """
                 INSERT INTO oauth_states
-                    (state, owner_id, scopes, created_at, expires_at, use_limit, used_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (
+                        state,
+                        owner_id,
+                        scopes,
+                        created_at,
+                        expires_at,
+                        use_limit,
+                        used_count,
+                        purpose,
+                        target_user_id
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.state,
@@ -197,6 +254,8 @@ class AuthDatabase:
                     item.expires_at,
                     item.use_limit,
                     item.used_count,
+                    item.purpose,
+                    item.target_user_id,
                 ),
             )
 
@@ -208,7 +267,7 @@ class AuthDatabase:
             row = self._connection.execute(
                 """
                 SELECT state, owner_id, scopes, created_at, expires_at,
-                       use_limit, used_count
+                       use_limit, used_count, purpose, target_user_id
                 FROM oauth_states
                 WHERE state = ?
                   AND expires_at >= ?
@@ -241,7 +300,7 @@ class AuthDatabase:
             row = self._connection.execute(
                 """
                 SELECT state, owner_id, scopes, created_at, expires_at,
-                       use_limit, used_count
+                       use_limit, used_count, purpose, target_user_id
                 FROM oauth_states
                 WHERE state = ?
                   AND expires_at >= ?
@@ -325,6 +384,127 @@ class AuthDatabase:
             )
 
         return self.get_security_settings(settings.owner_id)
+
+    def get_access_control(self, user_id: int | str) -> AccessControl:
+        user_id_text = str(user_id)
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT user_id, blocked, force_ip_required, force_state,
+                       verified_ip, verified_at, created_at, updated_at
+                FROM access_controls
+                WHERE user_id = ?
+                """,
+                (user_id_text,),
+            ).fetchone()
+
+        if row is None:
+            return AccessControl(
+                user_id=user_id_text,
+                blocked=False,
+                force_ip_required=False,
+                force_state=None,
+                verified_ip=None,
+                verified_at=None,
+                created_at=0,
+                updated_at=0,
+            )
+
+        return _access_control_from_row(row)
+
+    def set_user_blocked(self, user_id: int | str, blocked: bool) -> AccessControl:
+        now = _now()
+        user_id_text = str(user_id)
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO access_controls (
+                    user_id,
+                    blocked,
+                    force_ip_required,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, 0, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    blocked = excluded.blocked,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id_text, _bool_to_int(blocked), now, now),
+            )
+
+        return self.get_access_control(user_id_text)
+
+    def require_access_check(
+        self,
+        user_id: int | str,
+        state: str,
+    ) -> AccessControl:
+        now = _now()
+        user_id_text = str(user_id)
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO access_controls (
+                    user_id,
+                    blocked,
+                    force_ip_required,
+                    force_state,
+                    verified_ip,
+                    verified_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, 0, 1, ?, NULL, NULL, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    force_ip_required = 1,
+                    force_state = excluded.force_state,
+                    verified_ip = NULL,
+                    verified_at = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id_text, state, now, now),
+            )
+
+        return self.get_access_control(user_id_text)
+
+    def complete_access_check(
+        self,
+        user_id: int | str,
+        state: str,
+        ip_address: str | None,
+    ) -> AccessControl:
+        now = _now()
+        user_id_text = str(user_id)
+        with self._lock:
+            existing = self.get_access_control(user_id_text)
+            if existing.force_state and existing.force_state != state:
+                return existing
+
+            self._connection.execute(
+                """
+                INSERT INTO access_controls (
+                    user_id,
+                    blocked,
+                    force_ip_required,
+                    force_state,
+                    verified_ip,
+                    verified_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, 0, 0, NULL, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    force_ip_required = 0,
+                    force_state = NULL,
+                    verified_ip = excluded.verified_ip,
+                    verified_at = excluded.verified_at,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id_text, ip_address, now, now, now),
+            )
+
+        return self.get_access_control(user_id_text)
 
     def save_account(self, account: OAuthAccount) -> OAuthAccount:
         with self._lock:
@@ -649,6 +829,21 @@ def _state_from_row(row: sqlite3.Row, used_count_offset: int = 0) -> OAuthState:
         expires_at=int(row["expires_at"]),
         use_limit=_optional_int(row["use_limit"]),
         used_count=int(row["used_count"] or 0) + used_count_offset,
+        purpose=str(row["purpose"] or "oauth"),
+        target_user_id=row["target_user_id"],
+    )
+
+
+def _access_control_from_row(row: sqlite3.Row) -> AccessControl:
+    return AccessControl(
+        user_id=str(row["user_id"]),
+        blocked=bool(row["blocked"]),
+        force_ip_required=bool(row["force_ip_required"]),
+        force_state=row["force_state"],
+        verified_ip=row["verified_ip"],
+        verified_at=_optional_int(row["verified_at"]),
+        created_at=int(row["created_at"] or 0),
+        updated_at=int(row["updated_at"] or 0),
     )
 
 

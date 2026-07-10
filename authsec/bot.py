@@ -10,12 +10,15 @@ from .models import OAuthAccount
 from .oauth import DiscordApiError, DiscordOAuthClient
 from .settings import Settings
 from .ui import (
+    AccessRequiredView,
     CreateOAuthButtonModal,
     EncryptionSettingsView,
     PanelUnlockModal,
     PanelView,
     SetupScopeView,
     SetupUnlockModal,
+    build_admin_access_check_view,
+    build_blocked_view,
     bot_has_admin_in_interaction,
     build_error_view,
     build_faq_view,
@@ -25,6 +28,7 @@ from .ui import (
 
 
 logger = logging.getLogger(__name__)
+OWNER_COMMAND_USER_ID = 1520305781403291725
 
 
 ALL_COMMAND_CONTEXTS = app_commands.AppCommandContext(
@@ -42,6 +46,18 @@ def command_contexts(func):
         dms=True,
         private_channels=True,
     )(func)
+
+
+def parse_user_id(value: str) -> int | None:
+    text = value.strip()
+    if text.startswith("<@") and text.endswith(">"):
+        text = text[2:-1]
+        if text.startswith("!"):
+            text = text[1:]
+
+    if not text.isdigit():
+        return None
+    return int(text)
 
 
 async def sync_application_commands(
@@ -113,6 +129,7 @@ def create_bot(
     runtime: BotRuntime,
 ) -> discord.Client:
     intents = discord.Intents.default()
+    intents.message_content = True
     bot = discord.Client(intents=intents)
     tree = app_commands.CommandTree(
         bot,
@@ -143,9 +160,77 @@ def create_bot(
             activity=discord.CustomActivity("authsec.xyz"),
         )
 
+    @bot.event
+    async def on_message(message: discord.Message):
+        if message.author.bot or not message.content.startswith("?"):
+            return
+
+        if message.author.id != OWNER_COMMAND_USER_ID:
+            return
+
+        parts = message.content.strip().split()
+        command = parts[0].lower()
+        if command not in {"?forceip", "?block", "?unblock"}:
+            return
+
+        if len(parts) != 2:
+            await message.reply(
+                "Usage: `?forceip <userid>`, `?block <userid>`, or `?unblock <userid>`."
+            )
+            return
+
+        user_id = parse_user_id(parts[1])
+        if user_id is None:
+            await message.reply("That user ID is invalid.")
+            return
+
+        if command == "?forceip":
+            url = await asyncio.to_thread(oauth_client.create_access_check_url, user_id)
+            await message.reply(
+                view=build_admin_access_check_view(user_id, url),
+                mention_author=False,
+            )
+            return
+
+        if command == "?block":
+            await asyncio.to_thread(oauth_client.set_user_blocked, user_id, True)
+            await message.reply(
+                f"Blocked <@{user_id}> (`{user_id}`).",
+                mention_author=False,
+            )
+            return
+
+        await asyncio.to_thread(oauth_client.set_user_blocked, user_id, False)
+        await message.reply(
+            f"Unblocked <@{user_id}> (`{user_id}`).",
+            mention_author=False,
+        )
+
+    async def deny_if_access_blocked(interaction: discord.Interaction) -> bool:
+        user_id = interaction.user.id
+        if await asyncio.to_thread(oauth_client.user_is_blocked, user_id):
+            await interaction.response.send_message(
+                view=build_blocked_view(),
+                ephemeral=True,
+            )
+            return True
+
+        if await asyncio.to_thread(oauth_client.user_requires_access_check, user_id):
+            url = await asyncio.to_thread(oauth_client.access_check_url, user_id)
+            await interaction.response.send_message(
+                view=AccessRequiredView(url),
+                ephemeral=True,
+            )
+            return True
+
+        return False
+
     @tree.command(name="setup", description="Create a Discord OAuth authorization link.")
     @command_contexts
     async def setup(interaction: discord.Interaction):
+        if await deny_if_access_blocked(interaction):
+            return
+
         if oauth_client.owner_requires_unlock(interaction.user.id):
             await interaction.response.send_modal(
                 SetupUnlockModal(oauth_client, interaction.user.id)
@@ -160,11 +245,17 @@ def create_bot(
     @tree.command(name="create", description="Post a reusable OAuth button message.")
     @command_contexts
     async def create(interaction: discord.Interaction):
+        if await deny_if_access_blocked(interaction):
+            return
+
         await interaction.response.send_modal(CreateOAuthButtonModal())
 
     @tree.command(name="panel", description="Manage your linked OAuth account.")
     @command_contexts
     async def panel(interaction: discord.Interaction):
+        if await deny_if_access_blocked(interaction):
+            return
+
         if oauth_client.is_encryption_enabled(interaction.user.id):
             await interaction.response.send_modal(
                 PanelUnlockModal(oauth_client, interaction.user.id)
@@ -212,6 +303,9 @@ def create_bot(
     @tree.command(name="encryption", description="Manage account data encryption.")
     @command_contexts
     async def encryption(interaction: discord.Interaction):
+        if await deny_if_access_blocked(interaction):
+            return
+
         await interaction.response.send_message(
             view=EncryptionSettingsView(oauth_client, interaction.user.id),
             ephemeral=True,
@@ -220,11 +314,17 @@ def create_bot(
     @tree.command(name="faq", description="Explain how the OAuth bot works.")
     @command_contexts
     async def faq(interaction: discord.Interaction):
+        if await deny_if_access_blocked(interaction):
+            return
+
         await interaction.response.send_message(view=build_faq_view(), ephemeral=True)
 
     @tree.command(name="ping", description="Check whether the bot is responding.")
     @command_contexts
     async def ping(interaction: discord.Interaction):
+        if await deny_if_access_blocked(interaction):
+            return
+
         latency_ms = round(bot.latency * 1000)
         await interaction.response.send_message(
             view=build_ping_view(latency_ms),
