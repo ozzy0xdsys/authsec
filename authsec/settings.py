@@ -11,6 +11,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "config.json"
 DEFAULT_DATABASE_PATH = BASE_DIR / "authsec.sqlite3"
 DEFAULT_REDIRECT_URI = "https://authsec.xyz/callback"
+DEFAULT_IP_LOOKUP_BASE_URL = "https://dashboard.ipstack.com/iplookup/ipstack_api.php"
+DEFAULT_IP_LOOKUP_ORIGIN = "https://ipstack.com"
 
 
 @dataclass(frozen=True)
@@ -44,9 +46,9 @@ class OAuthSettings:
 
 
 @dataclass(frozen=True)
-class IPInfoSettings:
-    token: str | None = None
-    base_url: str = "https://api.ipinfo.io/lite"
+class IPLookupSettings:
+    base_url: str = DEFAULT_IP_LOOKUP_BASE_URL
+    origin: str = DEFAULT_IP_LOOKUP_ORIGIN
 
 
 @dataclass(frozen=True)
@@ -55,7 +57,7 @@ class Settings:
     web: WebSettings
     database: DatabaseSettings
     oauth: OAuthSettings
-    ipinfo: IPInfoSettings
+    ip_lookup: IPLookupSettings
 
 
 def load_settings(path: Path = CONFIG_PATH) -> Settings:
@@ -65,6 +67,8 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     web = _dict(raw.get("web"))
     database = _dict(raw.get("database"))
     oauth = _dict(raw.get("oauth"))
+    ip_lookup = _dict(raw.get("ip_lookup"))
+    ipstack = _dict(raw.get("ipstack"))
     ipinfo = _dict(raw.get("ipinfo"))
 
     token = _first_value(
@@ -136,15 +140,29 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
         ("clear_port_before_start", "stop_port_processes"),
         ("AUTHSEC_CLEAR_WEB_PORT", "AUTHSEC_STOP_PORT_PROCESSES"),
     )
-    ipinfo_token = (
-        _first_mapping_value(ipinfo, ("token", "api_key", "key"))
-        or _first_mapping_value(raw, ("ipinfo_token", "ipinfo_api_key"))
-        or _first_environment_value(("AUTHSEC_IPINFO_TOKEN", "IPINFO_TOKEN"))
+    ip_lookup_base_url = (
+        _first_mapping_value(ip_lookup, ("base_url",))
+        or _first_mapping_value(ipstack, ("base_url", "url"))
+        or _first_mapping_value(ipinfo, ("base_url",))
+        or _first_mapping_value(
+            raw,
+            ("ip_lookup_base_url", "ipstack_base_url", "ipinfo_base_url"),
+        )
+        or _first_environment_value(
+            (
+                "AUTHSEC_IPSTACK_BASE_URL",
+                "AUTHSEC_IP_LOOKUP_BASE_URL",
+                "AUTHSEC_IPINFO_BASE_URL",
+            )
+        )
     )
-    ipinfo_base_url = (
-        _first_mapping_value(ipinfo, ("base_url",))
-        or _first_mapping_value(raw, ("ipinfo_base_url",))
-        or _first_environment_value(("AUTHSEC_IPINFO_BASE_URL",))
+    ip_lookup_origin = (
+        _first_mapping_value(ip_lookup, ("origin",))
+        or _first_mapping_value(ipstack, ("origin",))
+        or _first_mapping_value(raw, ("ip_lookup_origin", "ipstack_origin"))
+        or _first_environment_value(
+            ("AUTHSEC_IPSTACK_ORIGIN", "AUTHSEC_IP_LOOKUP_ORIGIN")
+        )
     )
 
     return Settings(
@@ -170,9 +188,9 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
             ),
             state_ttl_seconds=int(oauth.get("state_ttl_seconds", 10 * 60)),
         ),
-        ipinfo=IPInfoSettings(
-            token=str(ipinfo_token).strip() if ipinfo_token else None,
-            base_url=str(ipinfo_base_url or "https://api.ipinfo.io/lite").rstrip("/"),
+        ip_lookup=IPLookupSettings(
+            base_url=str(ip_lookup_base_url or DEFAULT_IP_LOOKUP_BASE_URL).rstrip("/"),
+            origin=str(ip_lookup_origin or DEFAULT_IP_LOOKUP_ORIGIN).rstrip("/"),
         ),
     )
 

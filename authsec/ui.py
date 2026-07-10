@@ -1821,24 +1821,46 @@ def build_user_view(
 
 
 def build_ip_info_view(payload: dict[str, Any]) -> discord.ui.LayoutView:
+    connection = dict_payload(payload.get("connection"))
+    security = dict_payload(payload.get("security"))
+    time_zone = dict_payload(payload.get("time_zone"))
+
     header_lines = [
         f"**IP Address:** `{safe_optional_text(payload.get('ip')) or 'unknown'}`",
+        f"**Type:** {format_unknown(payload.get('type'), 32)}",
     ]
 
     location_lines = [
-        f"**Country:** {format_name_with_code(payload.get('country'), payload.get('country_code'))}",
-        f"**Continent:** {format_name_with_code(payload.get('continent'), payload.get('continent_code'))}",
+        f"**City:** {format_unknown(payload.get('city'))}",
+        f"**Region:** {format_name_with_code(payload.get('region_name'), payload.get('region_code'))}",
+        f"**ZIP:** {format_unknown(payload.get('zip'), 32)}",
+        f"**Country:** {format_name_with_code(payload.get('country_name'), payload.get('country_code'))}",
+        f"**Continent:** {format_name_with_code(payload.get('continent_name'), payload.get('continent_code'))}",
+        f"**Coordinates:** {format_coordinates(payload.get('latitude'), payload.get('longitude'))}",
+        f"**Time zone:** {format_time_zone(time_zone)}",
     ]
 
     network_lines = [
-        f"**ASN:** {format_plain_asn(payload.get('asn'))}",
-        f"**Network name:** {format_unknown(payload.get('as_name'))}",
-        f"**Network domain:** {format_unknown(payload.get('as_domain'))}",
+        f"**ASN:** {format_plain_asn(connection.get('asn'))}",
+        f"**ISP:** {format_unknown(connection.get('isp'))}",
+        f"**Carrier:** {format_unknown(connection.get('carrier'))}",
+        f"**Connection type:** {format_unknown(payload.get('connection_type'), 64)}",
+        f"**Routing type:** {format_unknown(payload.get('ip_routing_type'), 64)}",
+        f"**Organization type:** {format_unknown(connection.get('organization_type'))}",
+    ]
+
+    security_lines = [
+        f"**Proxy:** {format_optional_bool(security.get('is_proxy'))}",
+        f"**Tor:** {format_optional_bool(security.get('is_tor'))}",
+        f"**Hosting facility:** {format_optional_bool(security.get('hosting_facility'))}",
+        f"**Threat level:** {format_unknown(security.get('threat_level'), 64)}",
+        f"**VPN service:** {format_unknown(security.get('vpn_service'))}",
     ]
 
     header_body = "\n".join(header_lines)
     location_body = "\n".join(location_lines)
     network_body = "\n".join(network_lines)
+    security_body = "\n".join(security_lines)
 
     view = discord.ui.LayoutView(timeout=300)
     view.add_item(
@@ -1848,6 +1870,8 @@ def build_ip_info_view(payload: dict[str, Any]) -> discord.ui.LayoutView:
             discord.ui.TextDisplay(f"### Location\n{location_body}"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(f"### Network\n{network_body}"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(f"### Security\n{security_body}"),
             accent_color=ACCENT_DEFAULT,
         )
     )
@@ -2214,11 +2238,40 @@ def format_name_with_code(name_value: Any, code_value: Any) -> str:
     return "Unknown"
 
 
+def format_coordinates(latitude: Any, longitude: Any) -> str:
+    if latitude in (None, "") or longitude in (None, ""):
+        return "Unknown"
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return "Unknown"
+    return f"`{lat:.5f}, {lon:.5f}`"
+
+
+def format_time_zone(value: dict[str, Any]) -> str:
+    zone_id = safe_optional_text(value.get("id"), 80)
+    code = safe_optional_text(value.get("code"), 16)
+    if zone_id and code:
+        return f"{zone_id} (`{code}`)"
+    if zone_id:
+        return zone_id
+    if code:
+        return f"`{code}`"
+    return "Unknown"
+
+
 def format_plain_asn(value: Any) -> str:
     text = safe_optional_text(value, 32)
     if not text:
         return "Unknown"
     return f"`{text}`"
+
+
+def dict_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
 
 
 def safe_discord_text(value: Any) -> str:

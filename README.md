@@ -69,7 +69,8 @@ export DISCORD_CLIENT_SECRET="CLIENT_SECRET"
 export AUTHSEC_WEB_PORT="80"
 export AUTHSEC_REDIRECT_URI="https://authsec.xyz/callback"
 export AUTHSEC_CLEAR_WEB_PORT="true"
-export AUTHSEC_IPINFO_TOKEN="YOUR_IPINFO_TOKEN"
+export AUTHSEC_IPSTACK_BASE_URL="https://dashboard.ipstack.com/iplookup/ipstack_api.php"
+export AUTHSEC_IPSTACK_ORIGIN="https://ipstack.com"
 ```
 
 ## Database

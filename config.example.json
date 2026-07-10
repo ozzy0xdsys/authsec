@@ -21,8 +21,8 @@
     "refresh_before_expiry_seconds": 3600,
     "state_ttl_seconds": 600
   },
-  "ipinfo": {
-    "token": null,
-    "base_url": "https://api.ipinfo.io/lite"
+  "ip_lookup": {
+    "base_url": "https://dashboard.ipstack.com/iplookup/ipstack_api.php",
+    "origin": "https://ipstack.com"
   }
 }
