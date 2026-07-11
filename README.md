@@ -4,9 +4,9 @@ AuthSec is a Discord bot plus a Flask website for Discord OAuth.
 
 ## What It Does
 
-- `/setup` lets a user choose OAuth scopes and creates a short-lived Discord authorization link.
-  - Authorization links can be one-use, limited-use, or unlimited-use until they expire.
-  - Link expiry can be set from 10 minutes to 24 hours.
+- `/setup` lets a user choose OAuth scopes and creates a Discord authorization link.
+  - Authorization links can be one-use, limited-use, or unlimited-use.
+  - Links default to forever/unlimited uses, or can be limited by time and uses.
   - The generated link response includes a raw copyable URL and a `Post Here` button for posting a public authorization button.
 - `/create` posts a reusable button message for an OAuth link.
 - `/panel` shows the linked account and provides working actions:

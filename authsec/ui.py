@@ -144,7 +144,8 @@ class SetupScopeView(discord.ui.LayoutView):
                     f"{MAX_ACCOUNTS_PER_OWNER} accounts; re-authorizing the same "
                     "account updates its saved access.\n\n"
                     "Choose how long the authorization link works and how many times "
-                    "it can successfully link an account."
+                    "it can successfully link an account.\n\n"
+                    "**Default:** Forever with unlimited uses."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.ActionRow(ScopeSelect(self)),
@@ -192,7 +193,7 @@ class LinkDurationSelect(discord.ui.Select):
             options=[
                 discord.SelectOption(
                     label=format_oauth_link_ttl_label(seconds),
-                    value=str(seconds),
+                    value=oauth_link_ttl_select_value(seconds),
                     default=seconds == parent.link_ttl_seconds,
                 )
                 for seconds in OAUTH_LINK_TTL_OPTIONS
@@ -200,7 +201,9 @@ class LinkDurationSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        self.parent_view.link_ttl_seconds = int(self.values[0])
+        self.parent_view.link_ttl_seconds = parse_oauth_link_ttl_select_value(
+            self.values[0]
+        )
         await interaction.response.defer()
 
 
@@ -214,7 +217,7 @@ class LinkUseLimitSelect(discord.ui.Select):
             options=[
                 discord.SelectOption(
                     label=format_oauth_link_use_label(limit),
-                    value=str(limit),
+                    value=oauth_link_use_select_value(limit),
                     default=limit == parent.link_use_limit,
                 )
                 for limit in OAUTH_LINK_USE_LIMIT_OPTIONS
@@ -222,7 +225,9 @@ class LinkUseLimitSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        self.parent_view.link_use_limit = int(self.values[0])
+        self.parent_view.link_use_limit = parse_oauth_link_use_select_value(
+            self.values[0]
+        )
         await interaction.response.defer()
 
 
@@ -267,21 +272,20 @@ class GeneratedOAuthLinkView(discord.ui.LayoutView):
         self,
         url: str,
         scopes: list[str],
-        ttl_seconds: int,
-        use_limit: int,
+        ttl_seconds: int | None,
+        use_limit: int | None,
     ):
         super().__init__(timeout=None)
         self.url = url
         self.scopes = scopes
-        self.ttl_seconds = int(ttl_seconds)
-        self.use_limit = int(use_limit)
-        expires_at = int(time.time()) + self.ttl_seconds
+        self.ttl_seconds = ttl_seconds
+        self.use_limit = use_limit
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "## Authorization Link Ready\n"
                     "Open this link to authorize the selected access.\n\n"
-                    f"**Expires:** <t:{expires_at}:R>\n"
+                    f"**Expires:** {format_oauth_link_expiry_text(self.ttl_seconds)}\n"
                     f"**Uses:** {format_oauth_link_use_label(self.use_limit)}\n"
                     f"**Access:** {format_scope_list(scopes)}\n\n"
                     f"`{url}`"
@@ -1765,7 +1769,9 @@ def format_timeout_label(seconds: int) -> str:
     return f"{minutes} {suffix}"
 
 
-def format_oauth_link_ttl_label(seconds: int) -> str:
+def format_oauth_link_ttl_label(seconds: int | None) -> str:
+    if seconds is None:
+        return "Forever"
     seconds = int(seconds)
     if seconds < 60 * 60:
         minutes = max(1, seconds // 60)
@@ -1777,10 +1783,41 @@ def format_oauth_link_ttl_label(seconds: int) -> str:
 
 def format_oauth_link_use_label(use_limit: int | None) -> str:
     if use_limit in (None, 0):
-        return "Unlimited uses until expiry"
+        return "Unlimited uses"
     use_limit = int(use_limit)
     suffix = "use" if use_limit == 1 else "uses"
     return f"{use_limit} {suffix}"
+
+
+def format_oauth_link_expiry_text(seconds: int | None) -> str:
+    if seconds is None:
+        return "Forever"
+    expires_at = int(time.time()) + int(seconds)
+    return f"<t:{expires_at}:R>"
+
+
+def oauth_link_ttl_select_value(seconds: int | None) -> str:
+    if seconds is None:
+        return "forever"
+    return str(int(seconds))
+
+
+def parse_oauth_link_ttl_select_value(value: str) -> int | None:
+    if value == "forever":
+        return None
+    return int(value)
+
+
+def oauth_link_use_select_value(use_limit: int | None) -> str:
+    if use_limit in (None, 0):
+        return "unlimited"
+    return str(int(use_limit))
+
+
+def parse_oauth_link_use_select_value(value: str) -> int | None:
+    if value == "unlimited":
+        return None
+    return int(value)
 
 
 def build_user_view(
@@ -2292,7 +2329,7 @@ def build_faq_view() -> discord.ui.LayoutView:
         "\n".join(
             [
                 "**What does `/setup` do?**",
-                "It creates a short-lived Discord OAuth link with the scopes you select.",
+                "It creates a Discord OAuth link with the scopes you select.",
                 "",
                 "**Where is data stored?**",
                 "Linked account tokens, MFA status when Discord returns it, and callback IP metadata are stored in SQLite.",

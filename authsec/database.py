@@ -83,9 +83,9 @@ class AuthDatabase:
                     owner_id INTEGER NOT NULL,
                     scopes TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
-                    expires_at INTEGER NOT NULL,
+                    expires_at INTEGER,
                     used_at INTEGER,
-                    use_limit INTEGER DEFAULT 1,
+                    use_limit INTEGER,
                     used_count INTEGER NOT NULL DEFAULT 0,
                     purpose TEXT NOT NULL DEFAULT 'oauth',
                     target_user_id TEXT
@@ -145,6 +145,7 @@ class AuthDatabase:
                 "TEXT NOT NULL DEFAULT 'oauth'",
             )
             self._ensure_column("oauth_states", "target_user_id", "TEXT")
+            self._migrate_oauth_states_nullable_expiry()
             self._connection.execute(
                 """
                 UPDATE oauth_states
@@ -211,18 +212,19 @@ class AuthDatabase:
         state: str,
         owner_id: int,
         scopes: list[str],
-        ttl_seconds: int,
+        ttl_seconds: int | None,
         use_limit: int | None = DEFAULT_OAUTH_LINK_USE_LIMIT,
         purpose: str = "oauth",
         target_user_id: str | None = None,
     ) -> OAuthState:
         now = _now()
+        expires_at = None if ttl_seconds is None else now + int(ttl_seconds)
         item = OAuthState(
             state=state,
             owner_id=int(owner_id),
             scopes=scopes,
             created_at=now,
-            expires_at=now + int(ttl_seconds),
+            expires_at=expires_at,
             use_limit=use_limit,
             used_count=0,
             purpose=purpose,
@@ -270,7 +272,10 @@ class AuthDatabase:
                        use_limit, used_count, purpose, target_user_id
                 FROM oauth_states
                 WHERE state = ?
-                  AND expires_at >= ?
+                  AND (
+                    expires_at IS NULL
+                    OR expires_at >= ?
+                  )
                   AND (
                     use_limit IS NULL
                     OR used_count < use_limit
@@ -303,7 +308,10 @@ class AuthDatabase:
                        use_limit, used_count, purpose, target_user_id
                 FROM oauth_states
                 WHERE state = ?
-                  AND expires_at >= ?
+                  AND (
+                    expires_at IS NULL
+                    OR expires_at >= ?
+                  )
                   AND (
                     use_limit IS NULL
                     OR used_count < use_limit
@@ -321,7 +329,10 @@ class AuthDatabase:
             self._connection.execute(
                 """
                 DELETE FROM oauth_states
-                WHERE expires_at < ?
+                WHERE (
+                    expires_at IS NOT NULL
+                    AND expires_at < ?
+                  )
                    OR (
                     use_limit IS NOT NULL
                     AND used_count >= use_limit
@@ -698,6 +709,72 @@ class AuthDatabase:
             (*_account_values(account, created_at), int(account_id), int(account.owner_id)),
         )
 
+    def _migrate_oauth_states_nullable_expiry(self) -> None:
+        expires_at_column = next(
+            (
+                row
+                for row in self._connection.execute("PRAGMA table_info(oauth_states)")
+                if row["name"] == "expires_at"
+            ),
+            None,
+        )
+        if expires_at_column is None or not bool(expires_at_column["notnull"]):
+            return
+
+        self._connection.execute("DROP INDEX IF EXISTS idx_oauth_states_owner")
+        self._connection.execute("ALTER TABLE oauth_states RENAME TO oauth_states_legacy")
+        self._connection.execute(
+            """
+            CREATE TABLE oauth_states (
+                state TEXT PRIMARY KEY,
+                owner_id INTEGER NOT NULL,
+                scopes TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER,
+                used_at INTEGER,
+                use_limit INTEGER,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                purpose TEXT NOT NULL DEFAULT 'oauth',
+                target_user_id TEXT
+            )
+            """
+        )
+        self._connection.execute(
+            """
+            INSERT INTO oauth_states (
+                state,
+                owner_id,
+                scopes,
+                created_at,
+                expires_at,
+                used_at,
+                use_limit,
+                used_count,
+                purpose,
+                target_user_id
+            )
+            SELECT
+                state,
+                owner_id,
+                scopes,
+                created_at,
+                expires_at,
+                used_at,
+                use_limit,
+                used_count,
+                purpose,
+                target_user_id
+            FROM oauth_states_legacy
+            """
+        )
+        self._connection.execute("DROP TABLE oauth_states_legacy")
+        self._connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_oauth_states_owner
+                ON oauth_states(owner_id)
+            """
+        )
+
     def _migrate_oauth_accounts_primary_key(self) -> None:
         if "id" in self._column_names("oauth_accounts"):
             return
@@ -826,7 +903,7 @@ def _state_from_row(row: sqlite3.Row, used_count_offset: int = 0) -> OAuthState:
         owner_id=int(row["owner_id"]),
         scopes=scopes_from_json(row["scopes"]),
         created_at=int(row["created_at"]),
-        expires_at=int(row["expires_at"]),
+        expires_at=_optional_int(row["expires_at"]),
         use_limit=_optional_int(row["use_limit"]),
         used_count=int(row["used_count"] or 0) + used_count_offset,
         purpose=str(row["purpose"] or "oauth"),

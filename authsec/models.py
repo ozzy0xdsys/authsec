@@ -10,10 +10,17 @@ PASSWORD_MIN_LENGTH = 4
 PASSWORD_MAX_LENGTH = 30
 PANEL_TIMEOUT_OPTIONS = [3 * 60, 5 * 60, 10 * 60, 15 * 60, 30 * 60]
 DEFAULT_PANEL_TIMEOUT_SECONDS = 5 * 60
-OAUTH_LINK_TTL_OPTIONS = [10 * 60, 30 * 60, 60 * 60, 6 * 60 * 60, 24 * 60 * 60]
-DEFAULT_OAUTH_LINK_TTL_SECONDS = 10 * 60
-OAUTH_LINK_USE_LIMIT_OPTIONS = [1, 5, 10, 25, 0]
-DEFAULT_OAUTH_LINK_USE_LIMIT = 1
+OAUTH_LINK_TTL_OPTIONS: list[int | None] = [
+    None,
+    10 * 60,
+    30 * 60,
+    60 * 60,
+    6 * 60 * 60,
+    24 * 60 * 60,
+]
+DEFAULT_OAUTH_LINK_TTL_SECONDS: int | None = None
+OAUTH_LINK_USE_LIMIT_OPTIONS: list[int | None] = [None, 1, 5, 10, 25]
+DEFAULT_OAUTH_LINK_USE_LIMIT: int | None = None
 
 
 @dataclass(frozen=True)
@@ -22,7 +29,7 @@ class OAuthState:
     owner_id: int
     scopes: list[str]
     created_at: int
-    expires_at: int
+    expires_at: int | None
     use_limit: int | None = DEFAULT_OAUTH_LINK_USE_LIMIT
     used_count: int = 0
     purpose: str = "oauth"

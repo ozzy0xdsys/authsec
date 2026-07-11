@@ -987,18 +987,22 @@ def normalized_panel_timeout(seconds: int) -> int:
     return DEFAULT_PANEL_TIMEOUT_SECONDS
 
 
-def normalized_oauth_link_ttl(seconds: int | None) -> int:
+def normalized_oauth_link_ttl(seconds: Any) -> int | None:
+    if seconds in (None, "", 0, "0", "forever"):
+        return None
     try:
-        value = int(seconds) if seconds is not None else DEFAULT_OAUTH_LINK_TTL_SECONDS
+        value = int(seconds)
     except (TypeError, ValueError):
         return DEFAULT_OAUTH_LINK_TTL_SECONDS
+    if value == 0:
+        return None
     if value in OAUTH_LINK_TTL_OPTIONS:
         return value
     return DEFAULT_OAUTH_LINK_TTL_SECONDS
 
 
-def normalized_oauth_link_use_limit(value: int | None) -> int | None:
-    if value is None:
+def normalized_oauth_link_use_limit(value: Any) -> int | None:
+    if value in (None, "", 0, "0", "unlimited"):
         return None
     try:
         limit = int(value)
