@@ -1157,7 +1157,8 @@ class JoinServerConfirmView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(
                     "## Confirm Server Join\n"
                     f"You are about to add the linked account to **{guild_name}**.\n\n"
-                    "Discord will send the linked account a DM about what happened."
+                    "Discord will send the linked account a DM that the bot made them"
+                    "join a server"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.ActionRow(
@@ -1709,7 +1710,7 @@ def password_text_input(label: str) -> discord.ui.TextInput:
 
 def encryption_unlock_notice() -> discord.ui.TextDisplay:
     return discord.ui.TextDisplay(
-        "This password is only used to unlock encryption."
+        "This password will be used to unlock encrypted data once."
     )
 
 
@@ -1726,7 +1727,6 @@ def panel_timeout_lines(
         countdown = f"<t:{int(expires_at)}:R>"
 
     return [
-        f"**Panel button timeout setting:** {format_timeout_label(timeout_seconds)}",
         f"**Panel buttons disable:** {countdown} (<t:{int(expires_at)}:T>)",
     ]
 
