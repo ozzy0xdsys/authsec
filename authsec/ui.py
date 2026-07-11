@@ -399,6 +399,7 @@ class PanelUnlockModal(discord.ui.Modal, title="Unlock Panel"):
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
         self.password_input = password_text_input("Password")
+        self.add_item(encryption_unlock_notice())
         self.add_item(self.password_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -448,6 +449,7 @@ class SetupUnlockModal(discord.ui.Modal, title="Unlock Setup"):
         self.oauth_client = oauth_client
         self.owner_id = int(owner_id)
         self.password_input = password_text_input("Password")
+        self.add_item(encryption_unlock_notice())
         self.add_item(self.password_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -1702,6 +1704,12 @@ def password_text_input(label: str) -> discord.ui.TextInput:
         style=discord.TextStyle.short,
         min_length=PASSWORD_MIN_LENGTH,
         max_length=PASSWORD_MAX_LENGTH,
+    )
+
+
+def encryption_unlock_notice() -> discord.ui.TextDisplay:
+    return discord.ui.TextDisplay(
+        "This password is only used to unlock encryption."
     )
 
 
