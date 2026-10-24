@@ -28,7 +28,7 @@ from .ui import (
 
 
 logger = logging.getLogger(__name__)
-OWNER_COMMAND_USER_ID = 1520305781403291725
+OWNER_COMMAND_USER_ID = 00000000000000000 # Add your user ID
 
 
 ALL_COMMAND_CONTEXTS = app_commands.AppCommandContext(
